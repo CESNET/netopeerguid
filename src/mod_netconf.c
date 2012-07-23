@@ -524,15 +524,7 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 
 	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "creating mod_netconf master process");
 	mod_netconf_srv_cfg *srv = ap_get_module_config(s->module_config, &netconf_module);
-/*
-        apr_signal_init(srv->pool);
-        apr_signal(SIGTERM, signal_handler);
-        if (isterminated == 1) {
-                return OK;
-        }
-        apr_signal_init(srv->pool);
-        apr_signal(SIGTERM, signal_handler);
-*/
+
 	if (srv->forkproc == NULL) {
 		srv->forkproc = apr_pcalloc(srv->pool, sizeof(apr_proc_t));
 		apr_status_t res = apr_proc_fork(srv->forkproc, srv->pool);
@@ -667,171 +659,12 @@ static int mod_netconf_fixups(request_rec *r)
  */
 static int mod_netconf_handler(request_rec * r)
 {
-	char buffer[BUFFER_SIZE];
-	struct sockaddr_un addr;
-	int sock = -1;
-	int len;
-	apr_pool_t *temp_pool = NULL;
-	char *cred, *data, *print_session_key;
-	sck_message_t msg;
-	request_rec *redirect;
-
 	/* pseudo code of args to apr_proc_create() */
 	if (!r->handler || (strcmp(r->handler, "netconf") != 0)) {
 		return DECLINED;
 	}
 
-	return OK;
-
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "NETCONF_NSID: %s", apr_table_get(r->subprocess_env, "NETCONF_NSID"));
-	//ap_internal_redirect(r->main->uri, r);
-	redirect = ap_sub_req_lookup_uri("/display.php", r, NULL);
-	ap_internal_fast_redirect(redirect, r);
-	return OK;
-
-	r->content_type = "text/html;charset=UTF-8";
-
-	/* allow running module only as subrequest */
-	if (r->main == NULL) {
-		return DECLINED;
-	}
-
-
-	/* create temporary pool */
-	apr_pool_create(&temp_pool, NULL);
-
-	ap_rputs("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \
-			\"http://www.w3.org/TR/html4/loose.dtd\">", r);
-	ap_rputs("<html><head><title>mod_netconf testing</title></head><body>", r);
-
-	ap_rputs("<h2>PHP call</h2>\n<ul>\n", r);
-	ap_rprintf(r, "<li>NETCONF_OP: %s</li></ul>", apr_table_get(r->subprocess_env, "NETCONF_OP"));
-
-	ap_rputs("<h2>Operations list</h2>\n<ul>\n", r);
-
-	ap_rputs("<li>Preparing socket... ", r);
-	sock = socket(PF_UNIX, SOCK_STREAM, 0);
-	if (sock == -1) {
-		ap_rputs("FAILED</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot create socket");
-		goto close_page;
-	} else {
-		ap_rputs("OK</li>", r);
-	}
-
-	ap_rputs("<li>Connecting to the mod_netconf daemon... ", r);
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, SOCKET_FILENAME, sizeof(addr.sun_path));
-	len = strlen(addr.sun_path) + sizeof(addr.sun_family);
-	if (connect(sock, (struct sockaddr *) &addr, len) == -1) {
-		ap_rputs("FAILED </li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot connect to the mod_daemon");
-		goto close_page;
-	} else {
-		ap_rputs("OK</li>", r);
-	}
-
-	/*
-	 * Open NETCONF session
-	 */
-	ap_rputs("<li>Openning NETCONF session... ", r);
-
-	char *host = "localhost";
-	char *port = "830";
-	char *user = "krejci";
-	char *pass = "FO8967kr";
-
-	/* <MSG_TYPE><host>\0<port>\0<user>\0<pass>\0 */
-	cred = apr_psprintf(temp_pool, " %s %s %s %s", host, port, user, pass);
-	cred[len = 0] = MSG_OPEN;
-	cred[len += strlen(host) + 1] = 0; /* <host>\0 */
-	cred[len += strlen(port) + 1] = 0; /* <port>\0 */
-	cred[len += strlen(user) + 1] = 0; /* <user>\0 */
-	/* <pass>\0 is already done from printf, but we need to count index for send */
-	cred[len += strlen(pass) + 1] = 0;
-
-	send(sock, cred, len, 0);
-	len = recv(sock, buffer, BUFFER_SIZE, 0);
-
-	if (len < sizeof(sck_message_t)) {
-		ap_rputs("FAILED</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Invalid reply from mod_netconf daemon");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else if (buffer[0] != MSG_OK) {
-		ap_rputs("FAILED (unable to connect to NETCONF server)</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot connect with NETCONF server");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else {
-		/* ok, received OK message */
-		apr_cpystrn(msg.session_key, &(buffer[1]), APR_SHA1_DIGESTSIZE + 1);
-		ap_rprintf(r, "OK (session key %s)</li>\n", print_session_key = ap_escape_html(temp_pool, msg.session_key));
-	}
-
-	/*
-	 * Get device configuration data
-	 */
-
-	ap_rputs("<li>Getting device running data... ", r);
-	msg.type = MSG_DATA;
-	send(sock, (void*)(&msg), sizeof(msg), 0);
-	len = recv(sock, buffer, BUFFER_SIZE, 0);
-
-	if (len < 1) {
-		ap_rputs("FAILED</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Invalid reply from mod_netconf daemon");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else if (buffer[0] != MSG_DATA) {
-		ap_rputs("FAILED (get-config failed)</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot perform get-config operation");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else {
-		/* ok, received OK message */
-		ap_rputs("OK</li>\n", r);
-		data = ap_escape_html(temp_pool, &buffer[1]);
-	}
-
-	/*
-	 * Close the NETCONF session
-	 */
-	ap_rprintf(r, "<li>Closing NETCONF connection %s... ", print_session_key);
-	msg.type = MSG_CLOSE;
-	send(sock, (void*)(&msg), sizeof(msg), 0);
-	len = recv(sock, buffer, BUFFER_SIZE, 0);
-
-	if (len < sizeof(sck_message_t)) {
-		ap_rputs("FAILED</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Invalid reply from mod_netconf daemon");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else if (buffer[0] != MSG_OK) {
-		ap_rputs("FAILED (unable to close NETCONF session)</li></ul>\n", r);
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot close the NETCONF session");
-		apr_pool_destroy(temp_pool);
-		goto close_page;
-	} else {
-		/* ok, received OK message */
-		ap_rputs("OK</li>\n", r);
-	}
-	ap_rputs("</ul>\n", r);
-
-	ap_rputs("<h2>Data</h2>\n", r);
-	ap_rprintf(r, "%s", data);
-
-close_page:
-	ap_rputs("</body></html>", r);
-
-	/* clean up */
-	if (sock != -1) {
-		close (sock);
-	}
-	if (temp_pool != NULL) {
-		apr_pool_destroy(temp_pool);
-	}
-
+	/* everything was done in fixups */
 	return OK;
 }
 
