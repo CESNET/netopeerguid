@@ -98,18 +98,12 @@ struct timeval timeout = { 1, 0 };
 #define MSG_ERROR 4
 #define MSG_UNKNOWN 5
 
-typedef struct sck_message {
-	uint8_t type;
-	char session_key[APR_SHA1_DIGESTSIZE + 1];
-} __attribute__ ((packed)) sck_message_t;
-
 module AP_MODULE_DECLARE_DATA netconf_module;
 
 typedef struct {
 	apr_proc_t *forkproc;
 	apr_pool_t *pool;
-	uint32_t count;
-} mod_netconf_srv_cfg;
+} mod_netconf_cfg;
 
 volatile int isterminated = 0;
 
@@ -130,20 +124,25 @@ static void signal_handler(int sign)
 	}
 }
 
-static int gen_ncsession_hash(char *s, const int len, const char* hostname, const char* port, const char* sid)
+server_rec *gserver;
+static int gen_ncsession_hash(char** hash, const char* hostname, const char* port, const char* sid)
 {
-	if (s == NULL || len != (APR_SHA1_DIGESTSIZE + 1)) {
-		return (APR_EINVAL);
-	}
+	unsigned char hash_raw[APR_SHA1_DIGESTSIZE];
+	int i;
+
 	apr_sha1_ctx_t sha1_ctx;
 	apr_sha1_init(&sha1_ctx);
 	apr_sha1_update(&sha1_ctx, hostname, strlen(hostname));
 	apr_sha1_update(&sha1_ctx, port, strlen(port));
 	apr_sha1_update(&sha1_ctx, sid, strlen(sid));
-	apr_sha1_final((unsigned char*)s, &sha1_ctx);
+	apr_sha1_final(hash_raw, &sha1_ctx);
 
-	/* add missing terminating null byte */
-	s[APR_SHA1_DIGESTSIZE] = 0;
+	/* convert binary hash into hex string, which is printable */
+	*hash = malloc(sizeof(char) * ((2*APR_SHA1_DIGESTSIZE)+1));
+	for (i = 0; i < APR_SHA1_DIGESTSIZE; i++) {
+		snprintf(*hash + (2*i), 3, "%02x", hash_raw[i]);
+	}
+	//hash[2*APR_SHA1_DIGESTSIZE] = 0;
 
 	return (APR_SUCCESS);
 }
@@ -184,11 +183,12 @@ void netconf_callback_sshauth_interactive (const char* name,
 	return;
 }
 
-static void handle_msg_open(server_rec* server, int client, apr_hash_t* conns, char** address)
+static void handle_msg_open(server_rec* server, apr_pool_t* pool, int client, apr_hash_t* conns, char** address)
 {
-	sck_message_t message;
 	struct nc_session* session;
 	char *hostname, *port, *username, *sid;
+	char *session_key;
+	char *reply;
 
 	hostname = address[0];
 	port = address[1];
@@ -209,27 +209,39 @@ static void handle_msg_open(server_rec* server, int client, apr_hash_t* conns, c
 	if (session != NULL) {
 		/* generate hash for the session */
 		sid = nc_session_get_id(session);
-		gen_ncsession_hash(message.session_key, APR_SHA1_DIGESTSIZE + 1, hostname, port, sid);
+		gserver = server;
+		gen_ncsession_hash(&session_key, hostname, port, sid);
 		free(sid);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
 
-		apr_hash_set(conns, message.session_key, APR_HASH_KEY_STRING, (void *) session);
-		send(client, &message, sizeof(message), 0);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Key in hash to add: %s", session_key);
+		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) session);
+		reply = malloc(strlen(session_key) + 2);
+		reply[0] = MSG_OK;
+		strcpy(&(reply[1]), session_key);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "reply: %x%s", reply[0], &(reply[1]));
+		send(client, reply, strlen(session_key) + 2, 0);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session established");
+		free(session_key);
+		free(reply);
 		return;
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Connection could not be established");
 	}
 
-	message.type = MSG_ERROR;
-	memset(&message.session_key, 0, sizeof(message.session_key));
-	send(client, &message, sizeof(message), 0);
+	reply = malloc(2);
+	reply[0] = MSG_ERROR;
+	reply[1] = 0;
+	send(client, reply, 2, 0);
+	free(reply);
 }
 
 static void handle_msg_close(server_rec* server, int client, apr_hash_t* conns, char* session_key)
 {
 	struct nc_session *ns = NULL;
-	sck_message_t reply;
+	char* reply;
 
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Key in hash to get: %s", session_key);
 	ns = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (ns != NULL) {
 		nc_session_close (ns, "NETCONF session closed by client");
@@ -239,21 +251,26 @@ static void handle_msg_close(server_rec* server, int client, apr_hash_t* conns, 
 		/* remove session from the active sessions list */
 		apr_hash_set(conns, session_key, APR_HASH_KEY_STRING, NULL);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session closed");
-		reply.type = MSG_OK;
-		memset(&reply.session_key, 0, sizeof(reply.session_key));
-		send(client, &reply, sizeof(reply), 0);
+
+		reply = malloc(2);
+		reply[0] = MSG_OK;
+		reply[1] = 0;
+		send(client, reply, 2, 0);
+		free(reply);
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to close");
-		reply.type = MSG_ERROR;
-		memset(&reply.session_key, 0, sizeof(reply.session_key));
-		send(client, &reply, sizeof(reply), 0);
+
+		reply = malloc(2);
+		reply[0] = MSG_ERROR;
+		reply[1] = 0;
+		send(client, reply, 2, 0);
+		free(reply);
 	}
 }
 
 static void handle_netconf_request(server_rec* server, int client, apr_hash_t* conns, char* session_key)
 {
 	struct nc_session *session = NULL;
-	sck_message_t client_reply;
 	NC_DATASTORE target = NC_DATASTORE_RUNNING;
 	nc_rpc* rpc;
 	nc_reply* reply;
@@ -298,15 +315,18 @@ static void handle_netconf_request(server_rec* server, int client, apr_hash_t* c
 		}
 
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF get-config is done");
-		client_reply_data = malloc(sizeof(char) * (1 + strlen(data) + 1)); /* 1B message type, message length, 1B terminating null */
+		client_reply_data = malloc(sizeof(char) * (1 + strlen(data) + 1));
 		if (client_reply_data == NULL) {
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: allocating memory for client reply failed");
 			goto error_reply;
 		}
 		client_reply_data[0] = MSG_DATA;
 		apr_cpystrn(&client_reply_data[1], data, strlen(data) + 1);
-		send(client, client_reply_data, strlen(client_reply_data) + 1, 0);
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "sending message from daemon: %x", client_reply_data[0]);
+
+		client_reply_data[0] = MSG_OK;
+		send(client, client_reply_data, strlen(client_reply_data) + 2, 0);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "sending message from daemon: %s", client_reply_data);
+		free(client_reply_data);
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to close");
 		goto error_reply;
@@ -315,9 +335,11 @@ static void handle_netconf_request(server_rec* server, int client, apr_hash_t* c
 	return;
 
 error_reply:
-	client_reply.type = MSG_ERROR;
-	memset(&client_reply.session_key, 0, sizeof(client_reply.session_key));
-	send(client, &client_reply, sizeof(client_reply), 0);
+	client_reply_data = malloc(2);
+	client_reply_data[0] = MSG_ERROR;
+	client_reply_data[1] = 0;
+	send(client, client_reply_data, 2, 0);
+	free(client_reply_data);
 }
 
 static void get_target_address(char *address[4], char *cred)
@@ -343,6 +365,14 @@ int clb_print(const char* msg)
 	return (0);
 }
 
+/*
+ * This is actually implementation of NETCONF client
+ * - requests are received from UNIX socket in the predefined format
+ * - results are replied through the same way
+ * - the daemon run as a separate process, but it is started and stopped
+ *   automatically by Apache.
+ *
+ */
 static void forked_proc(apr_pool_t * pool, server_rec * server)
 {
 	struct sockaddr_un local, remote;
@@ -355,10 +385,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	char buffer[BUFFER_SIZE];
 	char *address[4];
 
-	/* change uid and gid of proccess for security reasons */
+	/* change uid and gid of process for security reasons */
 	unixd_setup_child();
 
-	/* create listening UNIX socket to accept incomming connections */
+	/* create listening UNIX socket to accept incoming connections */
 
 	if ((lsock = socket(PF_UNIX, SOCK_STREAM, 0)) == -1) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Creating socket failed (%s)", strerror(errno));
@@ -419,7 +449,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "client's socket accepted.");
 
 		/* set client's socket as non-blocking */
-		fcntl(client, F_SETFL, fcntl(client, F_GETFL, 0) | O_NONBLOCK);
+		//fcntl(client, F_SETFL, fcntl(client, F_GETFL, 0) | O_NONBLOCK);
 
 		while (1) {
 			fds.fd = client;
@@ -463,7 +493,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				switch (buffer[0]) {
 				case MSG_OPEN:
 					get_target_address(address, &buffer[1]);
-					handle_msg_open(server, client, netconf_sessions_list, address);
+					handle_msg_open(server, pool, client, netconf_sessions_list, address);
 					break;
 				case MSG_DATA:
 					/* netconf data */
@@ -474,10 +504,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				default:
 					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf message type");
-					sck_message_t message;
-					message.type = MSG_UNKNOWN;
-					memset(&message.session_key, 0, sizeof(message.session_key));
-					send(client, (void *) &message, sizeof(message), 0);
 					break;
 				}
 			}
@@ -491,25 +517,26 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	exit(APR_SUCCESS);
 }
 
-static void *mod_netconf_create_srv_conf(apr_pool_t * pool, server_rec * s)
+static void *mod_netconf_create_conf(apr_pool_t * pool, server_rec * s)
 {
-	mod_netconf_srv_cfg *srv = apr_pcalloc(pool, sizeof(mod_netconf_srv_cfg));
-	apr_pool_create(&srv->pool, pool);
-	srv->forkproc = NULL;
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "init netconf module config");
-	if (srv == NULL) {
-		srv = apr_pcalloc(pool, sizeof(mod_netconf_srv_cfg));
-		apr_pool_create(&srv->pool, pool);
-	}
-	return (void *)srv;
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "Init netconf module config");
+
+	mod_netconf_cfg *config = apr_pcalloc(pool, sizeof(mod_netconf_cfg));
+	apr_pool_create(&config->pool, pool);
+	config->forkproc = NULL;
+
+	return (void *)config;
 }
 
 static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 		  apr_pool_t * plog, server_rec * s)
 {
+	mod_netconf_cfg *config;
+	apr_status_t res;
+
 	/* These two help ensure that we only init once. */
 	void *data;
-	const char *userdata_key = "netconf_ipc_init_module";
+	const char *userdata_key = "netconf_ipc_init";
 
 	/*
 	 * The following checks if this routine has been called before.
@@ -522,36 +549,38 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 		return (OK);
 	}
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "creating mod_netconf master process");
-	mod_netconf_srv_cfg *srv = ap_get_module_config(s->module_config, &netconf_module);
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "creating mod_netconf daemon");
+	config = ap_get_module_config(s->module_config, &netconf_module);
 
-	if (srv->forkproc == NULL) {
-		srv->forkproc = apr_pcalloc(srv->pool, sizeof(apr_proc_t));
-		apr_status_t res = apr_proc_fork(srv->forkproc, srv->pool);
+	if (config && config->forkproc == NULL) {
+		config->forkproc = apr_pcalloc(config->pool, sizeof(apr_proc_t));
+		res = apr_proc_fork(config->forkproc, config->pool);
 		switch (res) {
 		case APR_INCHILD:
 			/* set signal handler */
-			apr_signal_init(srv->pool);
+			apr_signal_init(config->pool);
 			apr_signal(SIGTERM, signal_handler);
 
 			/* log start of the separated NETCONF communication process */
-			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s, "mod_netconf master process created (PID %d)", getpid());
+			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s, "mod_netconf daemon started (PID %d)", getpid());
 
 			/* start main loop providing NETCONF communication */
-			forked_proc(srv->pool, s);
+			forked_proc(config->pool, s);
 
-			/* I never should be here */
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, s, "mod_netconf master process broke the main loop");
+			/* I never should be here, wtf?!? */
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, s, "mod_netconf daemon unexpectedly stopped");
 			exit(APR_EGENERAL);
 			break;
 		case APR_INPARENT:
 			/* register child to be killed (SIGTERM) when the module config's pool dies */
-			apr_pool_note_subprocess(srv->pool, srv->forkproc, APR_KILL_AFTER_TIMEOUT);
+			apr_pool_note_subprocess(config->pool, config->forkproc, APR_KILL_AFTER_TIMEOUT);
 			break;
 		default:
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, s, "apr_proc_fork() failed");
 			break;
 		}
+	} else {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "mod_netconf misses configuration structure");
 	}
 
 	return OK;
@@ -561,11 +590,12 @@ static int mod_netconf_fixups(request_rec *r)
 {
 	apr_pool_t *temp_pool = NULL;
 	char* operation;
-	char *cred;
+	char *data;
 	int len;
 	int sock = -1;
 	char buffer[BUFFER_SIZE];
 	struct sockaddr_un addr;
+	int retval = OK;
 
 	/* process only requests for the mod_netconf handler */
 	if (!r->handler || (strcmp(r->handler, "netconf") != 0)) {
@@ -610,38 +640,61 @@ static int mod_netconf_fixups(request_rec *r)
 		char *pass = apr_pstrdup(r->pool, apr_table_get(r->subprocess_env, "NETCONF_PASS"));
 
 		/* <MSG_TYPE><host>\0<port>\0<user>\0<pass>\0 */
-		cred = apr_psprintf(temp_pool, " %s %s %s %s", host, port, user, pass);
-		cred[len = 0] = MSG_OPEN;
-		cred[len += strlen(host) + 1] = 0; /* <host>\0 */
-		cred[len += strlen(port) + 1] = 0; /* <port>\0 */
-		cred[len += strlen(user) + 1] = 0; /* <user>\0 */
+		data = apr_psprintf(temp_pool, " %s %s %s %s", host, port, user, pass);
+		data[len = 0] = MSG_OPEN;
+		data[len += strlen(host) + 1] = 0; /* <host>\0 */
+		data[len += strlen(port) + 1] = 0; /* <port>\0 */
+		data[len += strlen(user) + 1] = 0; /* <user>\0 */
 		/* <pass>\0 is already done from printf, but we need to count index for send */
-		cred[len += strlen(pass) + 1] = 0;
+		data[len += strlen(pass) + 1] = 0;
 
-		send(sock, cred, len, 0);
+		send(sock, data, len, 0);
 		len = recv(sock, buffer, BUFFER_SIZE, 0);
 
-		if (len < sizeof(sck_message_t)) {
+		if (len < 2) {
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Invalid reply from mod_netconf daemon");
 			apr_pool_destroy(temp_pool);
 			return HTTP_INTERNAL_SERVER_ERROR;
 		} else if (buffer[0] != MSG_OK) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "received from daemon: %x%s", buffer[0], &(buffer[1]));
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot connect with NETCONF server");
 			apr_pool_destroy(temp_pool);
 			return HTTP_INTERNAL_SERVER_ERROR;
 		} else {
 			/* ok, received OK message */
-			//apr_table_set(r->subprocess_env, "NETCONF_NSID", &(buffer[1]));
-			apr_table_set(r->main->subprocess_env, "NETCONF_NSID", "somestring");
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "received from daemon: %x%s", buffer[0], &(buffer[1]));
+			apr_table_set(r->main->subprocess_env, "NETCONF_NSID", &(buffer[1]));
 		}
 	} else if (strcmp(operation, "disconnect") == 0) {
+		char* nsid = apr_pstrdup(r->pool, apr_table_get(r->subprocess_env, "NETCONF_NSID"));
+		data = apr_psprintf(temp_pool, " %s", nsid);
+		data[0] = MSG_CLOSE;
+		len = strlen(nsid) + 2;
+		send(sock, data, len, 0);
+		len = recv(sock, buffer, BUFFER_SIZE, 0);
+
+		if (len < 2) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Invalid reply from mod_netconf daemon");
+			retval = HTTP_INTERNAL_SERVER_ERROR;
+			goto cleanup;
+		} else if (buffer[0] != MSG_OK) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "received from daemon: %x%s", buffer[0], &(buffer[1]));
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Cannot connect with NETCONF server");
+			retval = HTTP_INTERNAL_SERVER_ERROR;
+			goto cleanup;
+		} else {
+			/* ok, received OK message */
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "received from daemon: %x%s", buffer[0], &(buffer[1]));
+		}
 
 	} else if (strcmp(operation, "get-config") == 0) {
 
 	} else {
-		return HTTP_NOT_IMPLEMENTED;
+		retval = HTTP_NOT_IMPLEMENTED;
+		goto cleanup;
 	}
 
+cleanup:
 	if (sock != -1) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "client closes socket");
 		close (sock);
@@ -650,7 +703,7 @@ static int mod_netconf_fixups(request_rec *r)
 		apr_pool_destroy(temp_pool);
 	}
 
-	return OK;
+	return retval;
 }
 
 /**
@@ -673,9 +726,10 @@ static int mod_netconf_handler(request_rec * r)
  */
 static void mod_netconf_register_hooks(apr_pool_t * p)
 {
+	ap_hook_post_config(mod_netconf_master_init, NULL, NULL, APR_HOOK_LAST);
 	ap_hook_fixups(mod_netconf_fixups, NULL, NULL, APR_HOOK_FIRST);
 	ap_hook_handler(mod_netconf_handler, NULL, NULL, APR_HOOK_MIDDLE);
-	ap_hook_post_config(mod_netconf_master_init, NULL, NULL, APR_HOOK_LAST);
+
 }
 
 /* Dispatch list for API hooks */
@@ -683,7 +737,7 @@ module AP_MODULE_DECLARE_DATA netconf_module = {
 	STANDARD20_MODULE_STUFF,
 	NULL,			/* create per-dir    config structures */
 	NULL,			/* merge  per-dir    config structures */
-	mod_netconf_create_srv_conf,	/* create per-server config structures */
+	mod_netconf_create_conf,	/* create per-server config structures */
 	NULL,			/* merge  per-server config structures */
 	NULL,			/* table of config file commands       */
 	mod_netconf_register_hooks	/* register hooks                      */
