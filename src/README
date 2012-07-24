@@ -1,6 +1,6 @@
 How To Setup Apache Server
 --------------------------
-- mod_netconf compilation requires apache2-devel package.
+- mod_netconf compilation requires apache2-devel and libjson-devel packages.
 
 - run following commands in this directory
 $ make
@@ -8,10 +8,9 @@ $ make
 
 - Add following lines into the (appropriate parts of the ) Apache configuration:
 LoadModule netconf_module                 /usr/lib64/apache2/mod_netconf.so
-<Location /netconf>
-        SetHandler netconf
-</Location>
 
-- copy index.php and login.php into Apache DocumentRoot.
-- create empty directory 'netconf' in Apache DocumentRoot
-- open index.php in the browser and follow instructions
+- Start Apache
+
+- For testing, you can run test-client
+  - run under the same user as Apache, or change access rights of the
+    communication socket (/tmp/pconn.sock) to allow writing.

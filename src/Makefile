@@ -1,17 +1,21 @@
 NAME=mod_netconf
-SOURCES=$(NAME).c
 
 APXS=/usr/sbin/apxs2
 
-CFLAGS=-I/usr/include/libxml2 
-LIBS=-lnetconf -lxml2 -lz -lm 
+CFLAGS=-I/usr/include/libxml2  -I/usr/include/json
+LIBS=-lnetconf -lxml2 -lz -lm -ljson 
 
-all: $(SOURCES)
-	$(APXS) $(CPPFLAGS) $(CFLAGS) $(LIBS) -c $(SOURCES)
+all: module client
+
+module: mod_netconf.c
+	$(APXS) $(CPPFLAGS) $(CFLAGS) $(LIBS) -c mod_netconf.c
+
+client: test-client.c
+	gcc -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
 
 install: $(NAME).la
 	$(APXS) -i $(NAME).la
 
 clean:
-	rm -rf .libs *.la *.lo *.slo
+	rm -rf .libs *.la *.lo *.slo test-client
 
