@@ -119,6 +119,9 @@ int main (int argc, char* argv[])
 	line = malloc(sizeof(char) * BUFFER_SIZE);
 
 	if (strcmp(argv[1], "connect") == 0) {
+		/*
+		 * create NETCONF session
+		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_CONNECT));
 		printf("Hostname: ");
@@ -141,6 +144,9 @@ int main (int argc, char* argv[])
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "pass", json_object_new_string(line));
 	} else if (strcmp(argv[1], "disconnect") == 0) {
+		/*
+		 * Close NETCONF session
+		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_DISCONNECT));
 		printf("Session: ");
@@ -148,6 +154,9 @@ int main (int argc, char* argv[])
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "session", json_object_new_string(line));
 	} else if (strcmp(argv[1], "copy-config") == 0) {
+		/*
+		 * NETCONF <copy-config>
+		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_COPYCONFIG));
 		printf("Session: ");
@@ -170,8 +179,55 @@ int main (int argc, char* argv[])
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "delete-config") == 0) {
+		/*
+		 * NETCONF <delete-config>
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_DELETECONFIG));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Target (running|startup|candidate): ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "edit-config") == 0) {
+		/*
+		 * NETCONF <edit-config>
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_EDITCONFIG));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Target (running|startup|candidate): ");
+		getline(&line, &len, stdin);
+		line[(strlen(line) - 1)] = 0;
+		json_object_object_add(msg, "target", json_object_new_string(line));
+		printf("Default operation (merge|replace|none): ");
+		getline(&line, &len, stdin);
+		line[(strlen(line) - 1)] = 0;
+		if (strlen(line) > 0) {
+			json_object_object_add(msg, "default-operation", json_object_new_string(line));
+		}
+		printf("Error option (stop-on-error|continue-on-error|rollback-on-error): ");
+		getline(&line, &len, stdin);
+		line[(strlen(line) - 1)] = 0;
+		if (strlen(line) > 0) {
+			json_object_object_add(msg, "error-option", json_object_new_string(line));
+		}
+		printf("Configuration data: ");
+		getline(&line, &len, stdin);
+		line[(strlen(line) - 1)] = 0;
+		if (strlen(line) > 0) {
+			json_object_object_add(msg, "config", json_object_new_string(line));
+		}
 	} else if (strcmp(argv[1], "get") == 0) {
+		/*
+		 * NETCONF <get>
+		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_GET));
 		printf("Session: ");
@@ -185,6 +241,9 @@ int main (int argc, char* argv[])
 			json_object_object_add(msg, "filter", json_object_new_string(line));
 		}
 	} else if (strcmp(argv[1], "get-config") == 0) {
+		/*
+		 * NETCONF <get-config>
+		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_GETCONFIG));
 		printf("Session: ");
@@ -202,9 +261,51 @@ int main (int argc, char* argv[])
 			json_object_object_add(msg, "filter", json_object_new_string(line));
 		}
 	} else if (strcmp(argv[1], "kill-session") == 0) {
+		/*
+		 * NETCONF <kill-session>
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_KILL));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Kill session with ID: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session-id", json_object_new_string(line));
 	} else if (strcmp(argv[1], "lock") == 0) {
+		/*
+		 * NETCONF <lock>
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_LOCK));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Target (running|startup|candidate): ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "unlock") == 0) {
+		/*
+		 * NETCONF <unlock>
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_UNLOCK));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Target (running|startup|candidate): ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else {
+		/*
+		 * Unknown request
+		 */
 		fprintf(stderr, "Unknown command %s\n", argv[1]);
 		close(sock);
 		return (EXIT_FAILURE);
