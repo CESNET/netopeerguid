@@ -377,30 +377,21 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 			return (EXIT_FAILURE);
 		}
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "1");
 
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "2");
 		if (nc_session_recv_reply (session, &reply) == 0) {
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "3");
 			nc_rpc_free (rpc);
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "4");
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "5");
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "6");
 				netconf_close(server, conns, session_key);
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "7");
 				return (EXIT_FAILURE);
 			}
 
 			/* there is error handled by callback */
 			return (EXIT_FAILURE);
 		}
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "8");
 		nc_rpc_free (rpc);
-ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "9");
 
 		switch (nc_reply_get_type (reply)) {
 		case NC_REPLY_OK:
