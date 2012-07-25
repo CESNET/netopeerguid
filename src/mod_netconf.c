@@ -362,7 +362,7 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_ke
 	}
 }
 
-static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target)
+static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
 {
 	struct nc_session *session = NULL;
 	nc_rpc* rpc;
@@ -372,7 +372,7 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (session != NULL) {
 		/* create requests */
-		rpc = nc_rpc_copyconfig(source, target, NULL);
+		rpc = nc_rpc_copyconfig(source, target, config);
 		if (rpc == NULL) {
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 			return (EXIT_FAILURE);
@@ -432,13 +432,13 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	socklen_t len, len2;
 	struct pollfd fds;
 	int status;
-	mod_netconf_cfg *config;
+	mod_netconf_cfg *cfg;
 	json_object *request, *reply;
 	int operation;
 	char* session_key, *data;
 	const char *msgtext;
 	const char *host, *port, *user, *pass;
-	const char *target, *source, *filter;
+	const char *target, *source, *filter, *config;
 	NC_DATASTORE ds_type1, ds_type2;
 
 	apr_hash_t *netconf_sessions_list;
@@ -447,8 +447,8 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	/* change uid and gid of process for security reasons */
 	unixd_setup_child();
 
-	config = ap_get_module_config(server->module_config, &netconf_module);
-	if (config == NULL) {
+	cfg = ap_get_module_config(server->module_config, &netconf_module);
+	if (cfg == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Getting mod_netconf configuration failed");
 		return;
 	}
@@ -460,7 +460,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	}
 
 	local.sun_family = AF_UNIX;
-	strncpy(local.sun_path, config->sockname, sizeof(local.sun_path));
+	strncpy(local.sun_path, cfg->sockname, sizeof(local.sun_path));
 	unlink(local.sun_path);
 	len = offsetof(struct sockaddr_un, sun_path) + strlen(local.sun_path);
 
@@ -639,23 +639,30 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				case MSG_COPYCONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
+					source = target = config = NULL;
 
 					source = json_object_get_string(json_object_object_get(request, "source"));
 					target = json_object_get_string(json_object_object_get(request, "target"));
 
 					reply = json_object_new_object();
 
-					if (strcmp(source, "running") == 0) {
-						ds_type1 = NC_DATASTORE_RUNNING;
-					} else if (strcmp(source, "startup") == 0) {
-						ds_type1 = NC_DATASTORE_STARTUP;
-					} else if (strcmp(source, "candidate") == 0) {
-						ds_type1 = NC_DATASTORE_CANDIDATE;
+					if (source != NULL) {
+						if (strcmp(source, "running") == 0) {
+							ds_type1 = NC_DATASTORE_RUNNING;
+						} else if (strcmp(source, "startup") == 0) {
+							ds_type1 = NC_DATASTORE_STARTUP;
+						} else if (strcmp(source, "candidate") == 0) {
+							ds_type1 = NC_DATASTORE_CANDIDATE;
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
+							break;
+						}
 					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
-						break;
+						ds_type1 = NC_DATASTORE_NONE;
+						config = json_object_get_string(json_object_object_get(request, "config"));
 					}
+
 					if (strcmp(target, "running") == 0) {
 						ds_type2 = NC_DATASTORE_RUNNING;
 					} else if (strcmp(target, "startup") == 0) {
@@ -668,11 +675,16 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						break;
 					}
 
-					if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type1, ds_type2) != EXIT_SUCCESS) {
+					if (target == NULL || (source == NULL && config == NULL)) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
+						json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters."));
 					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+						if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type1, ds_type2, config) != EXIT_SUCCESS) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+						}
 					}
 					break;
 				case MSG_DISCONNECT:

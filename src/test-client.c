@@ -157,7 +157,14 @@ int main (int argc, char* argv[])
 		printf("Source (running|startup|candidate): ");
 		getline (&line, &len, stdin);
 		line[(strlen(line)-1)] = 0;
-		json_object_object_add(msg, "source", json_object_new_string(line));
+		if (strlen(line) > 0) {
+			json_object_object_add(msg, "source", json_object_new_string(line));
+		} else {
+			printf("Configuration data: ");
+			getline (&line, &len, stdin);
+			line[(strlen(line)-1)] = 0;
+			json_object_object_add(msg, "config", json_object_new_string(line));
+		}
 		printf("Target (running|startup|candidate): ");
 		getline (&line, &len, stdin);
 		line[(strlen(line)-1)] = 0;
