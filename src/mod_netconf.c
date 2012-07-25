@@ -308,7 +308,7 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_ke
 	struct nc_session *session = NULL;
 	nc_rpc* rpc;
 	nc_reply* reply;
-	char* data;
+	char* data = NULL;
 	struct nc_filter *f = NULL;
 
 	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
@@ -350,7 +350,8 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_ke
 			break;
 		default:
 			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
-			return (NULL);
+			data = NULL; /* error return code */
+			break;
 		}
 		nc_reply_free(reply);
 
@@ -358,6 +359,63 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_ke
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
 		return (NULL);
+	}
+}
+
+static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target)
+{
+	struct nc_session *session = NULL;
+	nc_rpc* rpc;
+	nc_reply* reply;
+	int retval = EXIT_SUCCESS;
+
+	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
+	if (session != NULL) {
+		/* create requests */
+		rpc = nc_rpc_copyconfig(source, target, NULL);
+		if (rpc == NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+			return (EXIT_FAILURE);
+		}
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "1");
+
+		/* send the request and get the reply */
+		nc_session_send_rpc (session, rpc);
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "2");
+		if (nc_session_recv_reply (session, &reply) == 0) {
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "3");
+			nc_rpc_free (rpc);
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "4");
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "5");
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "6");
+				netconf_close(server, conns, session_key);
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "7");
+				return (EXIT_FAILURE);
+			}
+
+			/* there is error handled by callback */
+			return (EXIT_FAILURE);
+		}
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "8");
+		nc_rpc_free (rpc);
+ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "9");
+
+		switch (nc_reply_get_type (reply)) {
+		case NC_REPLY_OK:
+			retval = EXIT_SUCCESS;
+			break;
+		default:
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
+			retval = EXIT_FAILURE;
+			break;
+		}
+		nc_reply_free(reply);
+		return (retval);
+	} else {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
+		return (EXIT_FAILURE);
 	}
 }
 
@@ -506,6 +564,20 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				request = json_tokener_parse(buffer);
 				operation = json_object_get_int(json_object_object_get(request, "type"));
 
+				session_key = (char*) json_object_get_string(json_object_object_get(request, "session"));
+				/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
+				if (operation != MSG_CONNECT && session_key == NULL) {
+					reply =  json_object_new_object();
+					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+					json_object_object_add(reply, "error-message", json_object_new_string("Missing session specification."));
+					msgtext = json_object_to_json_string(reply);
+					send(client, msgtext, strlen(msgtext) + 1, 0);
+					json_object_put(reply);
+					/* there is some stupid client, so close the connection to give a chance to some other client */
+					close(client);
+					break;
+				}
+
 				switch (operation) {
 				case MSG_CONNECT:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Connect");
@@ -532,9 +604,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					free(session_key);
 					break;
 				case MSG_GET:
-					session_key = (char*)json_object_get_string(json_object_object_get(request, "session"));
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
-					/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 
 					filter = json_object_get_string(json_object_object_get(request, "filter"));
 
@@ -542,22 +612,19 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
-						break;
+						json_object_object_add(reply, "error-message", json_object_new_string("get failed."));
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
+						json_object_object_add(reply, "data", json_object_new_string(data));
 					}
-
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-					json_object_object_add(reply, "data", json_object_new_string(data));
 					break;
 				case MSG_GETCONFIG:
-					session_key = (char*)json_object_get_string(json_object_object_get(request, "session"));
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
-					/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 
 					source = json_object_get_string(json_object_object_get(request, "source"));
 					filter = json_object_get_string(json_object_object_get(request, "filter"));
 
-					reply =  json_object_new_object();
+					reply = json_object_new_object();
 
 					if (strcmp(source, "running") == 0) {
 						ds_type1 = NC_DATASTORE_RUNNING;
@@ -567,23 +634,58 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						ds_type1 = NC_DATASTORE_CANDIDATE;
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
 						break;
 					}
 
 					if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type1, filter)) == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
+						json_object_object_add(reply, "data", json_object_new_string(data));
+					}
+					break;
+				case MSG_COPYCONFIG:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
+
+					source = json_object_get_string(json_object_object_get(request, "source"));
+					target = json_object_get_string(json_object_object_get(request, "target"));
+
+					reply = json_object_new_object();
+
+					if (strcmp(source, "running") == 0) {
+						ds_type1 = NC_DATASTORE_RUNNING;
+					} else if (strcmp(source, "startup") == 0) {
+						ds_type1 = NC_DATASTORE_STARTUP;
+					} else if (strcmp(source, "candidate") == 0) {
+						ds_type1 = NC_DATASTORE_CANDIDATE;
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
+						break;
+					}
+					if (strcmp(target, "running") == 0) {
+						ds_type2 = NC_DATASTORE_RUNNING;
+					} else if (strcmp(target, "startup") == 0) {
+						ds_type2 = NC_DATASTORE_STARTUP;
+					} else if (strcmp(target, "candidate") == 0) {
+						ds_type2 = NC_DATASTORE_CANDIDATE;
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
 						break;
 					}
 
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-					json_object_object_add(reply, "data", json_object_new_string(data));
+					if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type1, ds_type2) != EXIT_SUCCESS) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+					}
 					break;
 				case MSG_DISCONNECT:
-					session_key = (char*)json_object_get_string(json_object_object_get(request, "session"));
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Disconnect session %s", session_key);
-					/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 
 					reply =  json_object_new_object();
 					if (netconf_close(server, netconf_sessions_list, session_key) != EXIT_SUCCESS) {
@@ -610,13 +712,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				} else {
 					break;
 				}
-
-#if 0
-				case MSG_DATA:
-					/* netconf data */
-					handle_netconf_request(server, client, netconf_sessions_list, &buffer[1]);
-					break;
-#endif
 			}
 		}
 	}

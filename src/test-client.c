@@ -88,7 +88,7 @@ void print_help(char* progname)
 
 int main (int argc, char* argv[])
 {
-	json_object* msg = NULL, *reply;
+	json_object* msg = NULL, *reply = NULL;
 	const char* msg_text;
 	int sock;
 	struct sockaddr_un addr;
@@ -148,6 +148,20 @@ int main (int argc, char* argv[])
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "session", json_object_new_string(line));
 	} else if (strcmp(argv[1], "copy-config") == 0) {
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_COPYCONFIG));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("Source (running|startup|candidate): ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "source", json_object_new_string(line));
+		printf("Target (running|startup|candidate): ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "delete-config") == 0) {
 	} else if (strcmp(argv[1], "edit-config") == 0) {
 	} else if (strcmp(argv[1], "get") == 0) {
@@ -193,7 +207,10 @@ int main (int argc, char* argv[])
 	if (msg != NULL) {
 		msg_text = json_object_to_json_string(msg);
 
-		printf("Sending: %s\n", msg_text);
+		if (json_object_object_get(msg, "pass") == NULL) {
+			/* print message only if it does not contain password */
+			printf("Sending: %s\n", msg_text);
+		}
 		send(sock, msg_text, strlen(msg_text) + 1, 0);
 
 		json_object_put(msg);
@@ -203,23 +220,29 @@ int main (int argc, char* argv[])
 	}
 
 	len = recv(sock, buffer, BUFFER_SIZE, 0);
-	reply = json_tokener_parse(buffer);
-	printf("Received:\n");
-	json_object_object_foreach(reply, key, value) {
-		printf("Key: %s, Value: ", key);
-		switch(json_object_get_type(value)) {
-		case json_type_string:
-			printf("%s\n", json_object_get_string(value));
-			break;
-		case json_type_int:
-			printf("%d\n", json_object_get_int(value));
-			break;
-		default:
-			printf("\n");
-			break;
-		}
+	if (len > 0) {
+		reply = json_tokener_parse(buffer);
 	}
-	json_object_put(reply);
+	printf("Received:\n");
+	if (reply == NULL) {
+		printf("(null)\n");
+	} else {
+		json_object_object_foreach(reply, key, value) {
+			printf("Key: %s, Value: ", key);
+			switch (json_object_get_type(value)) {
+			case json_type_string:
+				printf("%s\n", json_object_get_string(value));
+				break;
+			case json_type_int:
+				printf("%d\n", json_object_get_int(value));
+				break;
+			default:
+				printf("\n");
+				break;
+			}
+		}
+		json_object_put(reply);
+	}
 	close(sock);
 	free(line);
 
