@@ -80,7 +80,7 @@
 #include <libxml/parser.h>
 
 #define MAX_PROCS 5
-#define SOCKET_FILENAME "/tmp/pcon.sock"
+#define SOCKET_FILENAME "/tmp/mod_netconf.sock"
 #define MAX_SOCKET_CL 10
 #define BUFFER_SIZE 4096
 

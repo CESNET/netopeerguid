@@ -51,7 +51,7 @@
 #include <sys/un.h>
 #include <json/json.h>
 
-#define SOCKET_FILENAME "/tmp/pcon.sock"
+#define SOCKET_FILENAME "/tmp/mod_netconf.sock"
 #define BUFFER_SIZE 4096
 
 typedef enum MSG_TYPE {
