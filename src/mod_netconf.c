@@ -817,10 +817,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				case MSG_COPYCONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
-					source = target = config = NULL;
-
-					source = json_object_get_string(json_object_object_get(request, "source"));
-					target = json_object_get_string(json_object_object_get(request, "target"));
+					config = NULL;
 
 					reply = json_object_new_object();
 
