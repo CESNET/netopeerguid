@@ -274,143 +274,24 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, char* session_ke
 	}
 }
 
-static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, const char* filter)
+static int netconf_op(server_rec* server, apr_hash_t* conns, char* session_key, nc_rpc* rpc)
 {
 	struct nc_session *session = NULL;
-	nc_rpc* rpc;
-	nc_reply* reply;
-	char* data;
-	struct nc_filter *f = NULL;
-
-	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
-	if (session != NULL) {
-		/* create filter if set */
-		if (filter != NULL) {
-			f = nc_filter_new(NC_FILTER_SUBTREE, filter);
-		}
-
-		/* create requests */
-		rpc = nc_rpc_getconfig (source, f);
-		nc_filter_free(f);
-		if (rpc == NULL) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-			return (NULL);
-		}
-
-		/* send the request and get the reply */
-		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, &reply) == 0) {
-			nc_rpc_free (rpc);
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				netconf_close(server, conns, session_key);
-				return (NULL);
-			}
-
-			/* there is error handled by callback */
-			return (NULL);
-		}
-		nc_rpc_free (rpc);
-
-		switch (nc_reply_get_type (reply)) {
-		case NC_REPLY_DATA:
-			if ((data = nc_reply_get_data (reply)) == NULL) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-				return (NULL);
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
-			return (NULL);
-		}
-		nc_reply_free(reply);
-
-		return (data);
-	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		return (NULL);
-	}
-}
-
-static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_key, const char* filter)
-{
-	struct nc_session *session = NULL;
-	nc_rpc* rpc;
-	nc_reply* reply;
-	char* data = NULL;
-	struct nc_filter *f = NULL;
-
-	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
-	if (session != NULL) {
-		/* create filter if set */
-		if (filter != NULL) {
-			f = nc_filter_new(NC_FILTER_SUBTREE, filter);
-		}
-
-		/* create requests */
-		rpc = nc_rpc_get (f);
-		nc_filter_free(f);
-		if (rpc == NULL) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-			return (NULL);
-		}
-
-		/* send the request and get the reply */
-		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, &reply) == 0) {
-			nc_rpc_free (rpc);
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				netconf_close(server, conns, session_key);
-				return (NULL);
-			}
-
-			/* there is error handled by callback */
-			return (NULL);
-		}
-		nc_rpc_free (rpc);
-
-		switch (nc_reply_get_type (reply)) {
-		case NC_REPLY_DATA:
-			if ((data = nc_reply_get_data (reply)) == NULL) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-				return (NULL);
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
-			data = NULL; /* error return code */
-			break;
-		}
-		nc_reply_free(reply);
-
-		return (data);
-	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		return (NULL);
-	}
-}
-
-static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
-{
-	struct nc_session *session = NULL;
-	nc_rpc* rpc;
 	nc_reply* reply;
 	int retval = EXIT_SUCCESS;
 
+	/* check requests */
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
+		return (EXIT_FAILURE);
+	}
+
+	/* get session where send the RPC */
 	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (session != NULL) {
-		/* create requests */
-		rpc = nc_rpc_copyconfig(source, target, config);
-		if (rpc == NULL) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-			return (EXIT_FAILURE);
-		}
-
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
 		if (nc_session_recv_reply (session, &reply) == 0) {
-			nc_rpc_free (rpc);
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
 				netconf_close(server, conns, session_key);
@@ -420,7 +301,6 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 			/* there is error handled by callback */
 			return (EXIT_FAILURE);
 		}
-		nc_rpc_free (rpc);
 
 		switch (nc_reply_get_type (reply)) {
 		case NC_REPLY_OK:
@@ -437,6 +317,120 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
 		return (EXIT_FAILURE);
 	}
+}
+static char* netconf_opdata(server_rec* server, apr_hash_t* conns, char* session_key, nc_rpc* rpc)
+{
+	struct nc_session *session = NULL;
+	nc_reply* reply;
+	char* data;
+
+	/* check requests */
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
+		return (NULL);
+	}
+
+	/* get session where send the RPC */
+	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
+	if (session != NULL) {
+		/* send the request and get the reply */
+		nc_session_send_rpc (session, rpc);
+		if (nc_session_recv_reply (session, &reply) == 0) {
+			nc_rpc_free (rpc);
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				netconf_close(server, conns, session_key);
+				return (NULL);
+			}
+
+			/* there is error handled by callback */
+			return (NULL);
+		}
+		nc_rpc_free (rpc);
+
+		switch (nc_reply_get_type (reply)) {
+		case NC_REPLY_DATA:
+			if ((data = nc_reply_get_data (reply)) == NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+				return (NULL);
+			}
+			break;
+		default:
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
+			return (NULL);
+		}
+		nc_reply_free(reply);
+
+		return (data);
+	} else {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
+		return (NULL);
+	}
+}
+
+static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, const char* filter)
+{
+	nc_rpc* rpc;
+	struct nc_filter *f = NULL;
+	char* data = NULL;
+
+	/* create filter if set */
+	if (filter != NULL) {
+		f = nc_filter_new(NC_FILTER_SUBTREE, filter);
+	}
+
+	/* create requests */
+	rpc = nc_rpc_getconfig (source, f);
+	nc_filter_free(f);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (NULL);
+	}
+
+	data = netconf_opdata(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (data);
+}
+
+static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_key, const char* filter)
+{
+	nc_rpc* rpc;
+	struct nc_filter *f = NULL;
+	char* data = NULL;
+
+	/* create filter if set */
+	if (filter != NULL) {
+		f = nc_filter_new(NC_FILTER_SUBTREE, filter);
+	}
+
+	/* create requests */
+	rpc = nc_rpc_get (f);
+	nc_filter_free(f);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (NULL);
+	}
+
+	data = netconf_opdata(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (data);
+}
+
+static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
+{
+	nc_rpc* rpc;
+	int retval = EXIT_SUCCESS;
+
+	/* create requests */
+	rpc = nc_rpc_copyconfig(source, target, config);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (EXIT_FAILURE);
+	}
+
+	retval = netconf_op(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (retval);
 }
 
 server_rec* clb_print_server;
