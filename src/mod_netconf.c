@@ -664,6 +664,8 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					reply = json_object_new_object();
 
+					/* if source is NULL, set valid string for strcmp, that is invalid for the following test */
+					source = (source == NULL) ? "": source;
 					if (strcmp(source, "running") == 0) {
 						ds_type1 = NC_DATASTORE_RUNNING;
 					} else if (strcmp(source, "startup") == 0) {
@@ -716,6 +718,8 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						config = json_object_get_string(json_object_object_get(request, "config"));
 					}
 
+					/* if target is NULL, set valid string for strcmp, that is invalid for the following test */
+					target = (target == NULL) ? "": target;
 					if (strcmp(target, "running") == 0) {
 						ds_type2 = NC_DATASTORE_RUNNING;
 					} else if (strcmp(target, "startup") == 0) {
