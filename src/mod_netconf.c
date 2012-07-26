@@ -450,13 +450,13 @@ static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
-static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
 
 	/* create requests */
-	rpc = nc_rpc_deleteconfig(target);
+	rpc = op_func(target);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (EXIT_FAILURE);
@@ -465,6 +465,21 @@ static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, char* ses
 	retval = netconf_op(server, conns, session_key, rpc);
 	nc_rpc_free (rpc);
 	return (retval);
+}
+
+static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+{
+	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_deleteconfig));
+}
+
+static int netconf_lock(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+{
+	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_lock));
+}
+
+static int netconf_unlock(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+{
+	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_unlock));
 }
 
 server_rec* clb_print_server;
@@ -847,6 +862,16 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				case MSG_DELETECONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
+					/* no break - unifying code */
+				case MSG_LOCK:
+					if (operation == MSG_LOCK) {
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: lock (session %s)", session_key);
+					}
+					/* no break - unifying code */
+				case MSG_UNLOCK:
+					if (operation == MSG_UNLOCK) {
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
+					}
 
 					reply = json_object_new_object();
 
@@ -856,10 +881,25 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						break;
 					}
 
-					if (netconf_deleteconfig(server, netconf_sessions_list, session_key, ds_type_t) != EXIT_SUCCESS) {
+					switch(operation) {
+					case MSG_DELETECONFIG:
+						status = netconf_deleteconfig(server, netconf_sessions_list, session_key, ds_type_t);
+						break;
+					case MSG_LOCK:
+						status = netconf_lock(server, netconf_sessions_list, session_key, ds_type_t);
+						break;
+					case MSG_UNLOCK:
+						status = netconf_unlock(server, netconf_sessions_list, session_key, ds_type_t);
+						break;
+					default:
+						status = -1;
+						break;
+					}
+
+					if (status != EXIT_SUCCESS) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-							json_object_object_add(reply, "error-message", json_object_new_string("delete-config failed."));
+							json_object_object_add(reply, "error-message", json_object_new_string("operation failed."));
 						} else {
 							/* use filled err_reply from libnetconf's callback */
 							json_object_put(reply);
