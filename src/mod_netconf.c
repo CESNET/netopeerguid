@@ -197,6 +197,32 @@ void netconf_callback_sshauth_interactive (const char* name,
 	return;
 }
 
+static json_object *err_reply = NULL;
+void netconf_callback_error_process(const char* tag,
+		const char* type,
+		const char* severity,
+		const char* apptag,
+		const char* path,
+		const char* message,
+		const char* attribute,
+		const char* element,
+		const char* ns,
+		const char* sid)
+{
+	err_reply = json_object_new_object();
+	json_object_object_add(err_reply, "type", json_object_new_int(REPLY_ERROR));
+	if (tag) json_object_object_add(err_reply, "error-tag", json_object_new_string(tag));
+	if (type) json_object_object_add(err_reply, "error-type", json_object_new_string(type));
+	if (severity) json_object_object_add(err_reply, "error-severity", json_object_new_string(severity));
+	if (apptag) json_object_object_add(err_reply, "error-app-tag", json_object_new_string(apptag));
+	if (path) json_object_object_add(err_reply, "error-path", json_object_new_string(path));
+	if (message) json_object_object_add(err_reply, "error-message", json_object_new_string(message));
+	if (attribute) json_object_object_add(err_reply, "bad-attribute", json_object_new_string(attribute));
+	if (element) json_object_object_add(err_reply, "bad-element", json_object_new_string(element));
+	if (ns) json_object_object_add(err_reply, "bad-namespace", json_object_new_string(ns));
+	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
+}
+
 static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass)
 {
 	struct nc_session* session;
@@ -211,7 +237,10 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 	if (session != NULL) {
 		/* generate hash for the session */
 		sid = nc_session_get_id(session);
-		session_key = gen_ncsession_hash(host, port, sid);
+		session_key = gen_ncsession_hash(
+				(host==NULL) ? "localhost" : host,
+				(port==NULL) ? "830" : port,
+				sid);
 		free(sid);
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) session);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session established");
@@ -491,6 +520,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	nc_callback_ssh_host_authenticity_check(netconf_callback_ssh_hostkey_check);
 	nc_callback_sshauth_interactive(netconf_callback_sshauth_interactive);
 	nc_callback_sshauth_password(netconf_callback_sshauth_password);
+	nc_callback_error_reply(netconf_callback_error_process);
 
 	/* disable publickey authentication */
 	nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, -1);
@@ -569,6 +599,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				}
 
+				/* null global JSON error-reply */
+				err_reply = NULL;
+
+				/* process required operation */
 				switch (operation) {
 				case MSG_CONNECT:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Connect");
@@ -584,8 +618,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					reply =  json_object_new_object();
 					if (session_key == NULL) {
 						/* negative reply */
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
 					} else {
 						/* positive reply */
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
@@ -602,8 +642,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					reply =  json_object_new_object();
 
 					if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get failed."));
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("get failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
 						json_object_object_add(reply, "data", json_object_new_string(data));
@@ -630,8 +676,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					}
 
 					if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type1, filter)) == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
 						json_object_object_add(reply, "data", json_object_new_string(data));
@@ -680,8 +732,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters."));
 					} else {
 						if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type1, ds_type2, config) != EXIT_SUCCESS) {
-							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-							json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
+							if (err_reply == NULL) {
+								json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+								json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
+							} else {
+								/* use filled err_reply from libnetconf's callback */
+								json_object_put(reply);
+								reply = err_reply;
+							}
 						} else {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 						}
@@ -692,8 +750,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					reply =  json_object_new_object();
 					if (netconf_close(server, netconf_sessions_list, session_key) != EXIT_SUCCESS) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 					}
