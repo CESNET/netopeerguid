@@ -221,9 +221,7 @@ int main (int argc, char* argv[])
 		printf("Configuration data: ");
 		getline(&line, &len, stdin);
 		line[(strlen(line) - 1)] = 0;
-		if (strlen(line) > 0) {
-			json_object_object_add(msg, "config", json_object_new_string(line));
-		}
+		json_object_object_add(msg, "config", json_object_new_string(line));
 	} else if (strcmp(argv[1], "get") == 0) {
 		/*
 		 * NETCONF <get>
