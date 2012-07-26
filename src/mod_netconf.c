@@ -97,6 +97,7 @@ typedef enum MSG_TYPE {
 	REPLY_OK,
 	REPLY_DATA,
 	REPLY_ERROR,
+	REPLY_INFO,
 	MSG_CONNECT,
 	MSG_DISCONNECT,
 	MSG_GET,
@@ -106,7 +107,8 @@ typedef enum MSG_TYPE {
 	MSG_DELETECONFIG,
 	MSG_LOCK,
 	MSG_UNLOCK,
-	MSG_KILL
+	MSG_KILL,
+	MSG_INFO
 } MSG_TYPE;
 
 #define MSG_OK 0
@@ -522,12 +524,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	struct pollfd fds;
 	int status;
 	mod_netconf_cfg *cfg;
-	json_object *request, *reply;
+	json_object *request, *reply, *json_obj;
 	int operation;
 	char* session_key, *data;
 	const char *msgtext;
 	const char *host, *port, *user, *pass;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
+	struct nc_session *session = NULL;
+	struct nc_cpblts* cpblts;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = 0;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
@@ -686,6 +690,9 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				/* null global JSON error-reply */
 				err_reply = NULL;
 
+				/* prepare reply envelope */
+				reply =  json_object_new_object();
+
 				/* process required operation */
 				switch (operation) {
 				case MSG_CONNECT:
@@ -724,8 +731,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					filter = json_object_get_string(json_object_object_get(request, "filter"));
 
-					reply =  json_object_new_object();
-
 					if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -744,8 +749,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
 
 					filter = json_object_get_string(json_object_object_get(request, "filter"));
-
-					reply = json_object_new_object();
 
 					if (ds_type_s == -1) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -769,8 +772,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				case MSG_EDITCONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: edit-config (session %s)", session_key);
-
-					reply = json_object_new_object();
 
 					defop = json_object_get_string(json_object_object_get(request, "default-operation"));
 					if (defop != NULL) {
@@ -836,8 +837,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
 					config = NULL;
 
-					reply = json_object_new_object();
-
 					if (source == NULL) {
 						/* no explicit source specified -> use config data */
 						ds_type_s = NC_DATASTORE_NONE;
@@ -887,8 +886,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
 					}
 
-					reply = json_object_new_object();
-
 					if (ds_type_t == -1) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
@@ -928,8 +925,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					sid = json_object_get_string(json_object_object_get(request, "session-id"));
 
-					reply = json_object_new_object();
-
 					if (sid == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Missing session-id parameter."));
@@ -952,7 +947,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				case MSG_DISCONNECT:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Disconnect session %s", session_key);
 
-					reply =  json_object_new_object();
 					if (netconf_close(server, netconf_sessions_list, session_key) != EXIT_SUCCESS) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -965,6 +959,36 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 					}
+					break;
+				case MSG_INFO:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
+
+					session = (struct nc_session *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+					if (session != NULL) {
+						json_object_object_add(reply, "sid", json_object_new_string(data = nc_session_get_id(session)));
+						if (data) free(data);
+						json_object_object_add(reply, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
+						json_object_object_add(reply, "host", json_object_new_string(data = nc_session_get_host(session)));
+						if (data) free(data);
+						json_object_object_add(reply, "port", json_object_new_string(data = nc_session_get_port(session)));
+						if (data) free(data);
+						json_object_object_add(reply, "user", json_object_new_string(data = nc_session_get_user(session)));
+						if (data) free(data);
+						cpblts = nc_session_get_cpblts (session);
+						if (cpblts != NULL) {
+							json_obj = json_object_new_array();
+							nc_cpblts_iter_start (cpblts);
+							while ((data = nc_cpblts_iter_next (cpblts)) != NULL) {
+								json_object_array_add(json_obj, json_object_new_string(data));
+								free (data);
+							}
+							json_object_object_add(reply, "capabilities", json_obj);
+						}
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+					}
+
 					break;
 				default:
 					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);

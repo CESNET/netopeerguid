@@ -58,6 +58,7 @@ typedef enum MSG_TYPE {
 	REPLY_OK,
 	REPLY_DATA,
 	REPLY_ERROR,
+	REPLY_INFO,
 	MSG_CONNECT,
 	MSG_DISCONNECT,
 	MSG_GET,
@@ -67,7 +68,8 @@ typedef enum MSG_TYPE {
 	MSG_DELETECONFIG,
 	MSG_LOCK,
 	MSG_UNLOCK,
-	MSG_KILL
+	MSG_KILL,
+	MSG_INFO
 } MSG_TYPE;
 
 void print_help(char* progname)
@@ -84,6 +86,7 @@ void print_help(char* progname)
 	printf("\tkill-session\n");
 	printf("\tlock\n");
 	printf("\tunlock\n");
+	printf("\tinfo\n");
 }
 
 int main (int argc, char* argv[])
@@ -95,6 +98,7 @@ int main (int argc, char* argv[])
 	size_t len;
 	char buffer[BUFFER_SIZE];
 	char* line = NULL;
+	int i, alen;
 
 	if (argc != 2) {
 		print_help(argv[0]);
@@ -300,6 +304,16 @@ int main (int argc, char* argv[])
 		getline (&line, &len, stdin);
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "target", json_object_new_string(line));
+	} else if (strcmp(argv[1], "info") == 0) {
+		/*
+		 * Get information about NETCONF session
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_INFO));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
 	} else {
 		/*
 		 * Unknown request
@@ -341,6 +355,13 @@ int main (int argc, char* argv[])
 				break;
 			case json_type_int:
 				printf("%d\n", json_object_get_int(value));
+				break;
+			case json_type_array:
+				printf("\n");
+				alen = json_object_array_length(value);
+				for (i = 0; i < alen; i++) {
+					printf("\t(%d) %s\n", i, json_object_get_string(json_object_array_get_idx(value, i)));
+				}
 				break;
 			default:
 				printf("\n");
