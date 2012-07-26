@@ -630,9 +630,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						/* positive reply */
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 						json_object_object_add(reply, "session", json_object_new_string(session_key));
+
+						free(session_key);
 					}
 
-					free(session_key);
 					break;
 				case MSG_GET:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
