@@ -450,6 +450,23 @@ static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
+static int netconf_killsession(server_rec* server, apr_hash_t* conns, char* session_key, const char* sid)
+{
+	nc_rpc* rpc;
+	int retval = EXIT_SUCCESS;
+
+	/* create requests */
+	rpc = nc_rpc_killsession(sid);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (EXIT_FAILURE);
+	}
+
+	retval = netconf_op(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (retval);
+}
+
 static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
 {
 	nc_rpc* rpc;
@@ -510,7 +527,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	char* session_key, *data;
 	const char *msgtext;
 	const char *host, *port, *user, *pass;
-	const char *target, *source, *filter, *config, *defop, *erropt;
+	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = 0;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
@@ -897,6 +914,32 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 							json_object_object_add(reply, "error-message", json_object_new_string("operation failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+					}
+					break;
+				case MSG_KILL:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: kill-session, session %s", session_key);
+
+					sid = json_object_get_string(json_object_object_get(request, "session-id"));
+
+					reply = json_object_new_object();
+
+					if (sid == NULL) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Missing session-id parameter."));
+						break;
+					}
+
+					if (netconf_killsession(server, netconf_sessions_list, session_key, sid) != EXIT_SUCCESS) {
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("kill-session failed."));
 						} else {
 							/* use filled err_reply from libnetconf's callback */
 							json_object_put(reply);
