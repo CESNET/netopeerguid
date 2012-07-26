@@ -433,6 +433,23 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
+static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, const char* config)
+{
+	nc_rpc* rpc;
+	int retval = EXIT_SUCCESS;
+
+	/* create requests */
+	rpc = nc_rpc_editconfig(target, defop, erropt, config);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (EXIT_FAILURE);
+	}
+
+	retval = netconf_op(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (retval);
+}
+
 server_rec* clb_print_server;
 int clb_print(const char* msg)
 {
@@ -461,8 +478,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	char* session_key, *data;
 	const char *msgtext;
 	const char *host, *port, *user, *pass;
-	const char *target, *source, *filter, *config;
+	const char *target, *source, *filter, *config, *defop, *erropt;
 	NC_DATASTORE ds_type1, ds_type2;
+	NC_EDIT_DEFOP_TYPE defop_type = 0;
+	NC_EDIT_ERROPT_TYPE erropt_type = 0;
 
 	apr_hash_t *netconf_sessions_list;
 	char buffer[BUFFER_SIZE];
@@ -684,6 +703,80 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
 						json_object_object_add(reply, "data", json_object_new_string(data));
+					}
+					break;
+				case MSG_EDITCONFIG:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: edit-config (session %s)", session_key);
+
+					reply = json_object_new_object();
+
+					defop = json_object_get_string(json_object_object_get(request, "default-operation"));
+					if (defop != NULL) {
+						if (strcmp(defop, "merge") == 0) {
+							defop_type = NC_EDIT_DEFOP_MERGE;
+						} else if (strcmp(defop, "replace") == 0) {
+							defop_type = NC_EDIT_DEFOP_REPLACE;
+						} else if (strcmp(defop, "none") == 0) {
+							defop_type = NC_EDIT_DEFOP_NONE;
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Invalid default-operation parameter."));
+							break;
+						}
+					} else {
+						defop_type = 0;
+					}
+
+					erropt = json_object_get_string(json_object_object_get(request, "error-option"));
+					if (erropt != NULL) {
+						if (strcmp(erropt, "continue-on-error") == 0) {
+							erropt_type = NC_EDIT_ERROPT_CONT;
+						} else if (strcmp(erropt, "stop-on-error") == 0) {
+							erropt_type = NC_EDIT_ERROPT_STOP;
+						} else if (strcmp(erropt, "rollback-on-error") == 0) {
+							erropt_type = NC_EDIT_ERROPT_ROLLBACK;
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Invalid error-option parameter."));
+							break;
+						}
+					} else {
+						erropt_type = 0;
+					}
+
+					/* if target is NULL, set valid string for strcmp, that is invalid for the following test */
+					target = json_object_get_string(json_object_object_get(request, "target"));
+					target = (target == NULL) ? "": target;
+					if (strcmp(target, "running") == 0) {
+						ds_type1 = NC_DATASTORE_RUNNING;
+					} else if (strcmp(target, "startup") == 0) {
+						ds_type1 = NC_DATASTORE_STARTUP;
+					} else if (strcmp(target, "candidate") == 0) {
+						ds_type1 = NC_DATASTORE_CANDIDATE;
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
+						break;
+					}
+
+					config = json_object_get_string(json_object_object_get(request, "config"));
+					if (config == NULL) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid config data parameter."));
+						break;
+					}
+
+					if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type1, defop_type, erropt_type, config) != EXIT_SUCCESS) {
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("edit-config failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 					}
 					break;
 				case MSG_COPYCONFIG:
