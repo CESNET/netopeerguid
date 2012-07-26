@@ -44,7 +44,7 @@ Optional:
 key: error-tag (string)
 key: error-type (string)
 key: error-severity (string)
-key: error-apptag (string)
+key: error-app-tag (string)
 key: error-path (string)
 key: bad-attribute (string)
 key: bad-element (string)
