@@ -14,3 +14,110 @@ LoadModule netconf_module                 /usr/lib64/apache2/mod_netconf.so
 - For testing, you can run test-client
   - run under the same user as Apache, or change access rights of the
     communication socket (/tmp/pconn.sock) to allow writing.
+
+    
+mod_netconf Message Format
+--------------------------
+
+UNIX socket (with default path /tmp/mod_netconf.sock) is used for communication
+with mod_netconf daemon. Messages are formated using JSON with the following
+content. Client is free to send multiple requests when the communication socket
+to the mod_netconf daemon is opened.
+
+Replies
+~~~~~~~
+1) OK
+key: type (int), value: 0
+
+Optional (for request type 3 - create NETCONF connection):
+key: session (string), value: 40 unique characters of session identifier
+
+2) DATA
+key: type (int), value: 1
+key: data (string)
+
+3) ERROR
+key: type (int), value: 2
+key: error-message (string)
+
+Optional:
+key: error-tag (string)
+key: error-type (string)
+key: error-severity (string)
+key: error-apptag (string)
+key: error-path (string)
+key: bad-attribute (string)
+key: bad-element (string)
+key: bad-namespace (string)
+key: session-id (string)
+
+Requests
+~~~~~~~~
+1) Request to create NETCONF session
+key: type (int), value: 3
+key: user (string)
+key: pass (string), value: plain text password
+
+Optional:
+key: host (string), "localhost" if not specified
+key: port (string), "830" if not specified
+
+2) Request to close NETCONF session
+key: type (int), value: 4
+key: session (string), value: unique session identifier
+
+3) NETCONF <get>
+key: type (int), value: 5
+key: session (string), value: unique session identifier
+
+Optional:
+key: filter (string), value: xml subtree filter
+
+4) NETCONF <get-config>
+key: type (int), value: 6
+key: session (string), value: unique session identifier
+key: source (string), value: running|startup|candidate
+
+Optional:
+key: filter (string), value: xml subtree filter
+
+5) NETCONF <edit-config>
+key: type (int), value: 7
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate
+key: config (string), value: editing configuration data according to NETCONF RFC
+
+Optional:
+key: default-operation (string), value: merge|replace|none
+key: error-option (string), value: stop-on-error|continue-on-error|rollback-on-error 
+
+6) NETCONF <copy-config>
+key: type (int), value: 8
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate
+
+Alternating:
+key: source (string), value: running|startup|candidate
+key: config (string), value: new complete configuration data, if source not specified
+
+7) NETCONF <delete-config>
+key: type (int), value: 9
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate
+
+8) NETCONF <lock>
+key: type (int), value: 10
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate
+
+9) NETCONF <unlock>
+key: type (int), value: 11
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate
+
+10) NETCONF <kill-session>
+key: type (int), value: 12
+key: session (string), value: unique session identifier
+key: session-id (string), value: ID of the session to kill
+
+
