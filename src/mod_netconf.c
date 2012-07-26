@@ -450,6 +450,23 @@ static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
+static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+{
+	nc_rpc* rpc;
+	int retval = EXIT_SUCCESS;
+
+	/* create requests */
+	rpc = nc_rpc_deleteconfig(target);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (EXIT_FAILURE);
+	}
+
+	retval = netconf_op(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (retval);
+}
+
 server_rec* clb_print_server;
 int clb_print(const char* msg)
 {
@@ -826,6 +843,30 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						} else {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 						}
+					}
+					break;
+				case MSG_DELETECONFIG:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
+
+					reply = json_object_new_object();
+
+					if (ds_type_t == -1) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
+						break;
+					}
+
+					if (netconf_deleteconfig(server, netconf_sessions_list, session_key, ds_type_t) != EXIT_SUCCESS) {
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("delete-config failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 					}
 					break;
 				case MSG_DISCONNECT:
