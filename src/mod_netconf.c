@@ -479,7 +479,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	const char *msgtext;
 	const char *host, *port, *user, *pass;
 	const char *target, *source, *filter, *config, *defop, *erropt;
-	NC_DATASTORE ds_type1, ds_type2;
+	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = 0;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
 
@@ -612,6 +612,28 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					break;
 				}
 
+				/* get parameters */
+				ds_type_t = -1;
+				if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+					if (strcmp(target, "running") == 0) {
+						ds_type_t = NC_DATASTORE_RUNNING;
+					} else if (strcmp(target, "startup") == 0) {
+						ds_type_t = NC_DATASTORE_STARTUP;
+					} else if (strcmp(target, "candidate") == 0) {
+						ds_type_t = NC_DATASTORE_CANDIDATE;
+					}
+				}
+				ds_type_s = -1;
+				if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+					if (strcmp(source, "running") == 0) {
+						ds_type_s = NC_DATASTORE_RUNNING;
+					} else if (strcmp(source, "startup") == 0) {
+						ds_type_s = NC_DATASTORE_STARTUP;
+					} else if (strcmp(source, "candidate") == 0) {
+						ds_type_s = NC_DATASTORE_CANDIDATE;
+					}
+				}
+
 				/* null global JSON error-reply */
 				err_reply = NULL;
 
@@ -672,26 +694,17 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				case MSG_GETCONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
 
-					source = json_object_get_string(json_object_object_get(request, "source"));
 					filter = json_object_get_string(json_object_object_get(request, "filter"));
 
 					reply = json_object_new_object();
 
-					/* if source is NULL, set valid string for strcmp, that is invalid for the following test */
-					source = (source == NULL) ? "": source;
-					if (strcmp(source, "running") == 0) {
-						ds_type1 = NC_DATASTORE_RUNNING;
-					} else if (strcmp(source, "startup") == 0) {
-						ds_type1 = NC_DATASTORE_STARTUP;
-					} else if (strcmp(source, "candidate") == 0) {
-						ds_type1 = NC_DATASTORE_CANDIDATE;
-					} else {
+					if (ds_type_s == -1) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
 						break;
 					}
 
-					if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type1, filter)) == NULL) {
+					if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type_s, filter)) == NULL) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 							json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
@@ -744,16 +757,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						erropt_type = 0;
 					}
 
-					/* if target is NULL, set valid string for strcmp, that is invalid for the following test */
-					target = json_object_get_string(json_object_object_get(request, "target"));
-					target = (target == NULL) ? "": target;
-					if (strcmp(target, "running") == 0) {
-						ds_type1 = NC_DATASTORE_RUNNING;
-					} else if (strcmp(target, "startup") == 0) {
-						ds_type1 = NC_DATASTORE_STARTUP;
-					} else if (strcmp(target, "candidate") == 0) {
-						ds_type1 = NC_DATASTORE_CANDIDATE;
-					} else {
+					if (ds_type_t == -1) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
 						break;
@@ -766,7 +770,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						break;
 					}
 
-					if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type1, defop_type, erropt_type, config) != EXIT_SUCCESS) {
+					if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type_t, defop_type, erropt_type, config) != EXIT_SUCCESS) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 							json_object_object_add(reply, "error-message", json_object_new_string("edit-config failed."));
@@ -788,42 +792,29 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					reply = json_object_new_object();
 
-					if (source != NULL) {
-						if (strcmp(source, "running") == 0) {
-							ds_type1 = NC_DATASTORE_RUNNING;
-						} else if (strcmp(source, "startup") == 0) {
-							ds_type1 = NC_DATASTORE_STARTUP;
-						} else if (strcmp(source, "candidate") == 0) {
-							ds_type1 = NC_DATASTORE_CANDIDATE;
-						} else {
-							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-							json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
-							break;
-						}
-					} else {
-						ds_type1 = NC_DATASTORE_NONE;
+					if (source == NULL) {
+						/* no explicit source specified -> use config data */
+						ds_type_s = NC_DATASTORE_NONE;
 						config = json_object_get_string(json_object_object_get(request, "config"));
+					} else if (ds_type_s == -1) {
+						/* source datastore specified, but it is invalid */
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
+						break;
 					}
 
-					/* if target is NULL, set valid string for strcmp, that is invalid for the following test */
-					target = (target == NULL) ? "": target;
-					if (strcmp(target, "running") == 0) {
-						ds_type2 = NC_DATASTORE_RUNNING;
-					} else if (strcmp(target, "startup") == 0) {
-						ds_type2 = NC_DATASTORE_STARTUP;
-					} else if (strcmp(target, "candidate") == 0) {
-						ds_type2 = NC_DATASTORE_CANDIDATE;
-					} else {
+					if (ds_type_t == -1) {
+						/* invalid target datastore specified */
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
 						break;
 					}
 
-					if (target == NULL || (source == NULL && config == NULL)) {
+					if (source == NULL && config == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters."));
+						json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters - one of source and config is required."));
 					} else {
-						if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type1, ds_type2, config) != EXIT_SUCCESS) {
+						if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type_s, ds_type_t, config) != EXIT_SUCCESS) {
 							if (err_reply == NULL) {
 								json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 								json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
