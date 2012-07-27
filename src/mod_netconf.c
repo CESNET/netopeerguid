@@ -228,7 +228,6 @@ void netconf_callback_error_process(const char* tag,
 static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass)
 {
 	struct nc_session* session;
-	char *sid;
 	char *session_key;
 
 	/* connect to the requested NETCONF server */
@@ -238,12 +237,10 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
 		/* generate hash for the session */
-		sid = nc_session_get_id(session);
 		session_key = gen_ncsession_hash(
 				(host==NULL) ? "localhost" : host,
 				(port==NULL) ? "830" : port,
-				sid);
-		free(sid);
+				nc_session_get_id(session));
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) session);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session established");
 		return (session_key);
@@ -527,7 +524,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	json_object *request, *reply, *json_obj;
 	int operation;
 	char* session_key, *data;
-	const char *msgtext;
+	const char *msgtext, *cpbltstr;
 	const char *host, *port, *user, *pass;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
 	struct nc_session *session = NULL;
@@ -965,22 +962,17 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 					session = (struct nc_session *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 					if (session != NULL) {
-						json_object_object_add(reply, "sid", json_object_new_string(data = nc_session_get_id(session)));
-						if (data) free(data);
+						json_object_object_add(reply, "sid", json_object_new_string(nc_session_get_id(session)));
 						json_object_object_add(reply, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
-						json_object_object_add(reply, "host", json_object_new_string(data = nc_session_get_host(session)));
-						if (data) free(data);
-						json_object_object_add(reply, "port", json_object_new_string(data = nc_session_get_port(session)));
-						if (data) free(data);
-						json_object_object_add(reply, "user", json_object_new_string(data = nc_session_get_user(session)));
-						if (data) free(data);
+						json_object_object_add(reply, "host", json_object_new_string(nc_session_get_host(session)));
+						json_object_object_add(reply, "port", json_object_new_string(nc_session_get_port(session)));
+						json_object_object_add(reply, "user", json_object_new_string(nc_session_get_user(session)));
 						cpblts = nc_session_get_cpblts (session);
 						if (cpblts != NULL) {
 							json_obj = json_object_new_array();
 							nc_cpblts_iter_start (cpblts);
-							while ((data = nc_cpblts_iter_next (cpblts)) != NULL) {
-								json_object_array_add(json_obj, json_object_new_string(data));
-								free (data);
+							while ((cpbltstr = nc_cpblts_iter_next (cpblts)) != NULL) {
+								json_object_array_add(json_obj, json_object_new_string(cpbltstr));
 							}
 							json_object_object_add(reply, "capabilities", json_obj);
 						}
