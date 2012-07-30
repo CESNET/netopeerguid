@@ -43,41 +43,26 @@
  *
  */
 
-#include "httpd.h"
-#include "http_config.h"
-#include "http_protocol.h"
-#include "http_request.h"
-#include "ap_config.h"
-#include "http_log.h"
-#include "apu.h"
-#include "apr_general.h"
-#include "apr_sha1.h"
-#include "apr_file_io.h"
-
-#include <unixd.h>
-#include <apr_base64.h>
-#include <apr_pools.h>
-#include <apr_general.h>
-#include <apr_hash.h>
-#include <apr_strings.h>
-#include <apr_thread_proc.h>
-#include <apr_signal.h>
-
+#include <unistd.h>
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <poll.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
+
+#include <unixd.h>
+#include <httpd.h>
+#include <http_log.h>
+#include <http_config.h>
+
+#include <apr_sha1.h>
+#include <apr_hash.h>
+#include <apr_signal.h>
+#include <apr_strings.h>
 
 #include <json/json.h>
 
 #include <libnetconf.h>
-#include <libxml/tree.h>
-#include <libxml/parser.h>
+
 
 #define MAX_PROCS 5
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"

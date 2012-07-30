@@ -2,8 +2,8 @@ NAME=mod_netconf
 
 APXS=/usr/sbin/apxs2
 
-CFLAGS=-I/usr/include/libxml2  -I/usr/include/json
-LIBS=-lnetconf -lxml2 -lz -lm -ljson 
+CFLAGS=-I/usr/include/json
+LIBS=-lnetconf -ljson 
 
 all: module client
 
