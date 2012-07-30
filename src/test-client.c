@@ -69,7 +69,8 @@ typedef enum MSG_TYPE {
 	MSG_LOCK,
 	MSG_UNLOCK,
 	MSG_KILL,
-	MSG_INFO
+	MSG_INFO,
+	MSG_GENERIC
 } MSG_TYPE;
 
 void print_help(char* progname)
@@ -87,6 +88,7 @@ void print_help(char* progname)
 	printf("\tlock\n");
 	printf("\tunlock\n");
 	printf("\tinfo\n");
+	printf("\tgeneric\n");
 }
 
 int main (int argc, char* argv[])
@@ -314,6 +316,20 @@ int main (int argc, char* argv[])
 		getline (&line, &len, stdin);
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "session", json_object_new_string(line));
+	} else if (strcmp(argv[1], "generic") == 0) {
+		/*
+		 * Generic NETCONF request
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_GENERIC));
+		printf("Session: ");
+		getline (&line, &len, stdin);
+		line[(strlen(line)-1)] = 0;
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		printf("NETCONF <rpc> content: ");
+		getline(&line, &len, stdin);
+		line[(strlen(line) - 1)] = 0;
+		json_object_object_add(msg, "content", json_object_new_string(line));
 	} else {
 		/*
 		 * Unknown request

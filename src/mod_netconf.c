@@ -93,7 +93,8 @@ typedef enum MSG_TYPE {
 	MSG_LOCK,
 	MSG_UNLOCK,
 	MSG_KILL,
-	MSG_INFO
+	MSG_INFO,
+	MSG_GENERIC
 } MSG_TYPE;
 
 #define MSG_OK 0
@@ -236,7 +237,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 
 }
 
-static int netconf_close(server_rec* server, apr_hash_t* conns, char* session_key)
+static int netconf_close(server_rec* server, apr_hash_t* conns, const char* session_key)
 {
 	struct nc_session *ns = NULL;
 
@@ -258,7 +259,7 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, char* session_ke
 	}
 }
 
-static int netconf_op(server_rec* server, apr_hash_t* conns, char* session_key, nc_rpc* rpc)
+static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session_key, nc_rpc* rpc)
 {
 	struct nc_session *session = NULL;
 	nc_reply* reply;
@@ -302,7 +303,8 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, char* session_key, 
 		return (EXIT_FAILURE);
 	}
 }
-static char* netconf_opdata(server_rec* server, apr_hash_t* conns, char* session_key, nc_rpc* rpc)
+
+static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* session_key, nc_rpc* rpc)
 {
 	struct nc_session *session = NULL;
 	nc_reply* reply;
@@ -352,7 +354,7 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, char* session
 	}
 }
 
-static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, const char* filter)
+static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE source, const char* filter)
 {
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
@@ -376,7 +378,7 @@ static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, char* sess
 	return (data);
 }
 
-static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_key, const char* filter)
+static char* netconf_get(server_rec* server, apr_hash_t* conns, const char* session_key, const char* filter)
 {
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
@@ -400,7 +402,7 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, char* session_ke
 	return (data);
 }
 
-static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
+static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
@@ -417,7 +419,7 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
-static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, const char* config)
+static int netconf_editconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, const char* config)
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
@@ -434,7 +436,7 @@ static int netconf_editconfig(server_rec* server, apr_hash_t* conns, char* sessi
 	return (retval);
 }
 
-static int netconf_killsession(server_rec* server, apr_hash_t* conns, char* session_key, const char* sid)
+static int netconf_killsession(server_rec* server, apr_hash_t* conns, const char* session_key, const char* sid)
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
@@ -451,7 +453,7 @@ static int netconf_killsession(server_rec* server, apr_hash_t* conns, char* sess
 	return (retval);
 }
 
-static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
+static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
@@ -468,19 +470,83 @@ static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, char* ses
 	return (retval);
 }
 
-static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target)
 {
 	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_deleteconfig));
 }
 
-static int netconf_lock(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+static int netconf_lock(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target)
 {
 	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_lock));
 }
 
-static int netconf_unlock(server_rec* server, apr_hash_t* conns, char* session_key, NC_DATASTORE target)
+static int netconf_unlock(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target)
 {
 	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_unlock));
+}
+
+/**
+ * @return REPLY_OK: 0, *data == NULL
+ *         REPLY_DATA: 0, *data != NULL
+ *         REPLY_ERROR: 1, *data == NULL
+ */
+static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* session_key, const char* content, char** data)
+{
+	struct nc_session *session = NULL;
+	nc_reply* reply;
+	nc_rpc* rpc;
+	int retval = EXIT_SUCCESS;
+
+	/* create requests */
+	rpc = nc_rpc_generic(content);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (EXIT_FAILURE);
+	}
+
+	*data = NULL;
+
+	/* get session where send the RPC */
+	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
+	if (session != NULL) {
+		/* send the request and get the reply */
+		nc_session_send_rpc (session, rpc);
+		if (nc_session_recv_reply (session, &reply) == 0) {
+			nc_rpc_free (rpc);
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				netconf_close(server, conns, session_key);
+				return (EXIT_FAILURE);
+			}
+
+			/* there is error handled by callback */
+			return (EXIT_FAILURE);
+		}
+		nc_rpc_free (rpc);
+
+		switch (nc_reply_get_type (reply)) {
+		case NC_REPLY_DATA:
+			if ((*data = nc_reply_get_data (reply)) == NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+				return (EXIT_FAILURE);
+			}
+			retval = EXIT_SUCCESS;
+			break;
+		case NC_REPLY_OK:
+			retval = EXIT_SUCCESS;
+			break;
+		default:
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
+			retval = EXIT_FAILURE;
+			break;
+		}
+		nc_reply_free(reply);
+
+		return (retval);
+	} else {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
+		return (EXIT_FAILURE);
+	}
 }
 
 server_rec* clb_print_server;
@@ -966,6 +1032,35 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
 					}
 
+					break;
+				case MSG_GENERIC:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: generic request for session %s", session_key);
+
+					config = json_object_get_string(json_object_object_get(request, "content"));
+
+					if (config == NULL) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Missing content parameter."));
+						break;
+					}
+
+					if (netconf_generic(server, netconf_sessions_list, session_key, config, &data) != EXIT_SUCCESS) {
+						if (err_reply == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("kill-session failed."));
+						} else {
+							/* use filled err_reply from libnetconf's callback */
+							json_object_put(reply);
+							reply = err_reply;
+						}
+					} else {
+						if (data == NULL) {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
+							json_object_object_add(reply, "data", json_object_new_string(data));
+						}
+					}
 					break;
 				default:
 					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);
