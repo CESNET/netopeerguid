@@ -322,7 +322,6 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
 		if (nc_session_recv_reply (session, &reply) == 0) {
-			nc_rpc_free (rpc);
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
 				netconf_close(server, conns, session_key);
@@ -332,7 +331,6 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 			/* there is error handled by callback */
 			return (NULL);
 		}
-		nc_rpc_free (rpc);
 
 		switch (nc_reply_get_type (reply)) {
 		case NC_REPLY_DATA:
