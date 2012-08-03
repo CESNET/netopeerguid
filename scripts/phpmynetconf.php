@@ -199,10 +199,13 @@ function handle_get(&$sock)
 	}
 	$sessionkey = $_SESSION["keys"][$_REQUEST["key"]];
 
-	$decoded = execute_operation($sock,
-		array(	"type" => MsgType::MSG_GET,
+	$params = array("type" => MsgType::MSG_GET,
 			"session" => $sessionkey,
-			"source" => "running"));
+			"source" => "running");
+	if (isset($_REQUEST["filter"]) && $_REQUEST["filter"] != "") {
+		$params["filter"] = $_REQUEST["filter"];
+	}
+	$decoded = execute_operation($sock, $params);
 
 	echo "<h2>GET-CONFIG</h2>";
 	printxml($decoded["data"]);
@@ -218,10 +221,13 @@ function handle_getconfig(&$sock)
 		return 1;
 	}
 	$sessionkey = $_SESSION["keys"][$_REQUEST["key"]];
-	$decoded = execute_operation($sock,
-		array(	"type" => MsgType::MSG_GETCONFIG,
+	$params = array("type" => MsgType::MSG_GETCONFIG,
 			"session" => $sessionkey,
-			"source" => "running"));
+			"source" => (isset($_REQUEST["source"])?$_REQUEST["source"]:"running"));
+	if (isset($_REQUEST["filter"]) && $_REQUEST["filter"] != "") {
+		$params["filter"] = $_REQUEST["filter"];
+	}
+	$decoded = execute_operation($sock, $params);
 
 	echo "<h2>GET-CONFIG</h2>";
 	printxml($decoded["data"]);
@@ -266,13 +272,26 @@ if (!isset($_REQUEST["command"])) {
 	<label for='pass'>Password:</label><input type='password' name='pass'><br>
 	<input type='submit' value='Login'>
 	</form>";
-// pavl√k jan
 	if (isset($_SESSION["keys"])) {
 		echo "<h2>Already connected nodes</h2>";
 		$keys = $_SESSION["keys"];
 		$i = 0;
 		foreach ($keys as $k) {
-			echo "$i ".$_SESSION["hosts"][$i]." <a href='?command=get&amp;key=$i'>get</a> <a href='?command=getconfig&amp;key=$i'>get-config</a> <a href='?command=disconnect&amp;key=$i'>disconnect</a><br>";
+			echo "$i ".$_SESSION["hosts"][$i]."
+<form action='?' method='GET'>
+<input type='hidden' name='command' value='get'>
+<input type='hidden' name='key' value='$i'>
+<label for='get-filter'>Filter:</label><input type='text' name='filter'>
+<input type='submit' value='Execute Get'></form>
+<form action='?' method='GET'>
+<input type='hidden' name='command' value='getconfig'>
+<input type='hidden' name='key' value='$i'>
+<label for='get-filter'>Filter:</label><input type='text' name='filter'>
+<select name='source'><option value='running'>Running</option>
+<option value='startup'>Start-up</option>
+<option value='candidate'>Candidate</option></select>
+<input type='submit' value='Execute Get-config'></form>
+<a href='?command=disconnect&amp;key=$i'><button>disconnect</button></a><br>";
 			$i++;
 		}
 	}
