@@ -749,8 +749,13 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 					user = json_object_get_string(json_object_object_get(request, "user"));
 					pass = json_object_get_string(json_object_object_get(request, "pass"));
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
-					session_key = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass);
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
+					if ((host == NULL) || (user == NULL)) {
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
+						session_key = NULL;
+					} else {
+						session_key = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass);
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
+					}
 
 					reply =  json_object_new_object();
 					if (session_key == NULL) {
