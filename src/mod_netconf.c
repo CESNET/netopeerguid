@@ -548,10 +548,22 @@ static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* se
 }
 
 server_rec* clb_print_server;
-int clb_print(const char* msg)
+void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
-	ap_log_error(APLOG_MARK, APLOG_INFO, 0, clb_print_server, msg);
-	return (0);
+	switch (level) {
+	case NC_VERB_ERROR:
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, clb_print_server, msg);
+		break;
+	case NC_VERB_WARNING:
+		ap_log_error(APLOG_MARK, APLOG_WARNING, 0, clb_print_server, msg);
+		break;
+	case NC_VERB_VERBOSE:
+		ap_log_error(APLOG_MARK, APLOG_INFO, 0, clb_print_server, msg);
+		break;
+	case NC_VERB_DEBUG:
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, clb_print_server, msg);
+		break;
+	}
 }
 
 /*
