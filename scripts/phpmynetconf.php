@@ -238,6 +238,66 @@ function handle_getconfig(&$sock)
  \param[in,out] $sock socket descriptor
  \return 0 on success
 */
+function handle_editconfig(&$sock)
+{
+	if (check_logged_keys() != 0) {
+		return 1;
+	}
+	$sessionkey = $_SESSION["keys"][$_REQUEST["key"]];
+	/* execute get-config */
+	$decoded = execute_operation($sock,
+		array("type" => MsgType::MSG_GETCONFIG,
+		"session" => $sessionkey,
+		"source" => "running"));
+
+	/* apply changes */
+	$oldtree = $decoded["data"];
+	var_dump($oldtree);
+	echo "<br><br><br>";
+	$newtree = simplexml_load_string("<rootnode>".str_replace('<?xml version="1.0" encoding="UTF-8"?>', "", $oldtree)."</rootnode>");
+	echo "<br><br><br>";
+	var_dump($newtree->{'comet-testers'}->{'comet-tester'}->statistics->enabled);
+	//return 0;
+	$newtree->{'comet-testers'}->{'comet-tester'}->statistics->enabled = "false";
+	var_dump($newtree->{'comet-testers'}->{'comet-tester'}->statistics->enabled);
+	$config = "";
+	foreach ($newtree as $ch) {
+		$config .= $ch->asXML();
+	}
+	/* copy-config to store new values */
+	$params = array("type" => MsgType::MSG_EDITCONFIG,
+			"session" => $sessionkey,
+			"target" => "running",
+			"config" => $config);
+	print_r($params);
+	$decoded = execute_operation($sock, $params);
+
+	echo "<h2>EDIT-CONFIG</h2>";
+	var_dump($decoded);
+	return 0;
+}
+
+function handle_copyconfig(&$sock)
+{
+	$sessionkey = $_SESSION["keys"][$_REQUEST["key"]];
+	if (isset($_REQUEST["config"]) && $_REQUEST["config"] != '') {
+		$config = $_REQUEST["config"];
+		var_dump($config);
+		$params = array("type" => MsgType::MSG_COPYCONFIG,
+			"session" => $sessionkey,
+			"target" => "running",
+			"config" => $config);
+		$decoded = execute_operation($sock, $params);
+		var_dump($decoded);
+	} else {
+		echo "No config was sent";
+	}
+}
+
+/**
+ \param[in,out] $sock socket descriptor
+ \return 0 on success
+*/
 function handle_disconnect(&$sock)
 {
 	if (check_logged_keys() != 0) {
@@ -263,6 +323,36 @@ function handle_disconnect(&$sock)
 /* main part of script */
 session_start();
 
+/* create connection with socket */
+if (isset($_REQUEST["getconfig"]) || (isset($_REQUEST["command"]))) {
+	$errno = 0;
+	$errstr = "";
+	$sock = fsockopen('unix:///tmp/mod_netconf.sock', NULL, $errno, $errstr);
+	if ($errno != 0) {
+		echo "Could not connect to socket.";
+		echo "$errstr";
+		return 1;
+	}
+	stream_set_timeout($sock, 1, 100);
+}
+
+/* pseudo-AJAX response of get-config running */
+if (isset($_REQUEST["getconfig"])) {
+	if (check_logged_keys() != 0) {
+		return 1;
+	}
+	$sessionkey = $_SESSION["keys"][$_REQUEST["key"]];
+	$params = array("type" => MsgType::MSG_GETCONFIG,
+			"session" => $sessionkey,
+			"source" => "running");
+	$decoded = execute_operation($sock, $params);
+	echo $decoded["data"];
+	/* end script return only data */
+	exit(0);
+}
+
+
+/* print mainpage */
 if (!isset($_REQUEST["command"])) {
 	echo "<h2>Connect to new NETCONF server</h2>
 	<form action='?' method='POST'>
@@ -291,27 +381,42 @@ if (!isset($_REQUEST["command"])) {
 <option value='startup'>Start-up</option>
 <option value='candidate'>Candidate</option></select>
 <input type='submit' value='Execute Get-config'></form>
-<a href='?command=disconnect&amp;key=$i'><button>disconnect</button></a><br>";
+<!--<form action='?' method='GET'>
+<input type='hidden' name='command' value='editconfig'>
+<input type='hidden' name='key' value='$i'>
+<label for='edit-element'>Element name:</label><input type='text' name='element'>
+<label for='edit-value'>Value:</label><input type='text' name='newval'>
+<input type='submit' value='Execute Edit-config'>
+</form>-->
+<form action='?' method='POST'>
+<input type='hidden' name='command' value='copyconfig'>
+<input type='hidden' name='key' value='$i'>
+<textarea name='config' id='configdata$i' cols=40 rows=10></textarea>
+<input type='submit' value='Rewrite running config'> (copy-config)
+</form>
+<a href='?command=disconnect&amp;key=$i'><button>disconnect</button></a><br>
+<script type='text/javascript'>
+xmlHttp = new XMLHttpRequest();
+xmlHttp.open( 'GET', '?key=$i&getconfig', false );
+xmlHttp.send( null );
+document.getElementById('configdata$i').value=xmlHttp.responseText;
+</script>";
 			$i++;
 		}
 	}
 	exit(0);
 }
 
+/* handle commands */
 if (isset($_REQUEST["command"])) {
-	$errno = 0;
-	$errstr = "";
-	$sock = fsockopen('unix:///tmp/mod_netconf.sock', NULL, $errno, $errstr);
-	if ($errno != 0) {
-		echo "Could not connect to socket.";
-		echo "$errstr";
-		return 1;
-	}
-	stream_set_timeout($sock, 1, 100);
 	echo "<a href='?'>Back</a>";
 
 	if ($_REQUEST["command"] === "connect") {
 		handle_connect($sock);
+	} else if ($_REQUEST["command"] === "copyconfig") {
+		handle_copyconfig($sock);
+	} else if ($_REQUEST["command"] === "editconfig") {
+		handle_editconfig($sock);
 	} else if ($_REQUEST["command"] === "get") {
 		handle_get($sock);
 	} else if ($_REQUEST["command"] === "getconfig") {
