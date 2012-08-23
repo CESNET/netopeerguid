@@ -175,8 +175,8 @@ int main (int argc, char* argv[])
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "source", json_object_new_string(line));
 		} else {
-			printf("Configuration data: ");
-			getline (&line, &len, stdin);
+			printf("Configuration data (ending with CTRL+D): ");
+			getdelim (&line, &len, 'D' - 0x40, stdin);
 			line[(strlen(line)-1)] = 0;
 			json_object_object_add(msg, "config", json_object_new_string(line));
 		}
@@ -224,8 +224,8 @@ int main (int argc, char* argv[])
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "error-option", json_object_new_string(line));
 		}
-		printf("Configuration data: ");
-		getline(&line, &len, stdin);
+		printf("Configuration data (ending with CTRL+D): ");
+		getdelim(&line, &len, 'D' - 0x40, stdin);
 		line[(strlen(line) - 1)] = 0;
 		json_object_object_add(msg, "config", json_object_new_string(line));
 	} else if (strcmp(argv[1], "get") == 0) {
