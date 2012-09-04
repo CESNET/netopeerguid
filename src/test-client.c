@@ -41,6 +41,7 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,9 +51,10 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <json/json.h>
+#include <ctype.h>
 
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 40960
 
 typedef enum MSG_TYPE {
 	REPLY_OK,
@@ -98,9 +100,11 @@ int main (int argc, char* argv[])
 	int sock;
 	struct sockaddr_un addr;
 	size_t len;
-	char buffer[BUFFER_SIZE];
-	char* line = NULL;
+	char *buffer;
+	char* line = NULL, *chunked_msg_text;
 	int i, alen;
+	int buffer_size, buffer_len, ret, chunk_len;
+	char c, chunk_len_str[12];
 
 	if (argc != 2) {
 		print_help(argv[0]);
@@ -342,23 +346,79 @@ int main (int argc, char* argv[])
 	/* send the message */
 	if (msg != NULL) {
 		msg_text = json_object_to_json_string(msg);
+		asprintf (&chunked_msg_text, "\n#%d\n%s\n##\n", (int)strlen(msg_text), msg_text);
 
 		if (json_object_object_get(msg, "pass") == NULL) {
 			/* print message only if it does not contain password */
 			printf("Sending: %s\n", msg_text);
 		}
-		send(sock, msg_text, strlen(msg_text) + 1, 0);
+		send(sock, chunked_msg_text, strlen(chunked_msg_text) + 1, 0);
 
 		json_object_put(msg);
+		free (chunked_msg_text);
 	} else {
 		close(sock);
 		return (EXIT_FAILURE);
 	}
 
-	len = recv(sock, buffer, BUFFER_SIZE, 0);
-	if (len > 0) {
-		reply = json_tokener_parse(buffer);
+	/* read json in chunked framing */
+	buffer_size = 0;
+	buffer_len = 0;
+	buffer = NULL;
+	while (1) {
+		/* read chunk length */
+		if ((ret = recv (sock, &c, 1, 0)) != 1 || c != '\n') {
+			free (buffer);
+			buffer = NULL;
+			break;
+		}
+		if ((ret = recv (sock, &c, 1, 0)) != 1 || c != '#') {
+			free (buffer);
+			buffer = NULL;
+			break;
+		}
+		i=0;
+		memset (chunk_len_str, 0, 12);
+		while ((ret = recv (sock, &c, 1, 0) == 1 && (isdigit(c) || c == '#'))) {
+			if (i==0 && c == '#') {
+				if (recv (sock, &c, 1, 0) != 1 || c != '\n') {
+					/* end but invalid */
+					free (buffer);
+					buffer = NULL;
+				}
+				/* end of message, double-loop break */
+				goto msg_complete;
+			}
+			chunk_len_str[i++] = c;
+		}
+		if (c != '\n') {
+			free (buffer);
+			buffer = NULL;
+			break;
+		}
+		if ((chunk_len = atoi (chunk_len_str)) == 0) {
+			free (buffer);
+			buffer = NULL;
+			break;
+		}
+		buffer_size += chunk_len+1;
+		buffer = realloc (buffer, sizeof(char)*buffer_size);
+		if ((ret = recv (sock, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
+			free (buffer);
+			buffer = NULL;
+			break;
+		}
+		buffer_len += ret;
 	}
+msg_complete:
+
+	if (buffer != NULL) {
+		reply = json_tokener_parse(buffer);
+		free (buffer);
+	} else {
+		reply = NULL;
+	}
+
 	printf("Received:\n");
 	if (reply == NULL) {
 		printf("(null)\n");

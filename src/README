@@ -20,8 +20,10 @@ mod_netconf Message Format
 --------------------------
 
 UNIX socket (with default path /tmp/mod_netconf.sock) is used for communication
-with mod_netconf daemon. Messages are formated using JSON with the following
-content. Client is free to send multiple requests when the communication socket
+with mod_netconf daemon. Messages are formated using JSON and encoded using
+Chunked Framing Mechanism described in RFC6242 (http://tools.ietf.org/html/rfc6242#section-4.2)
+with the following content.
+Client is free to send multiple requests when the communication socket
 to the mod_netconf daemon is opened.
 
 Replies

@@ -767,27 +767,51 @@ void * thread_routine (void * arg)
 		buffer_len = 0;
 		buffer = NULL;
 		while (1) {
-			fds.fd = client;
-			fds.events = POLLIN;
-			fds.revents = 0;
-
-			status = poll(&fds, 1, 1000);
-
-			if (status == 0 || (status == -1 && (errno == EAGAIN || (errno == EINTR && isterminated == 0)))) {
-				/* poll was interrupted - check if the isterminated is set and if not, try poll again */
-				//ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "poll interrupted");
-				continue;
-			} else if (status < 0) {
-				/* 0:  poll time outed
-				 *     close socket and ignore this request from the client, it can try it again
-				 * -1: poll failed
-				 *     something wrong happend, close this socket and wait for another request
-				 */
-				//ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "poll failed, status %d(%d: %s)", status, errno, strerror(errno));
-				close(client);
+			/* read chunk length */
+			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '\n') {
+				free (buffer);
+				buffer = NULL;
 				break;
 			}
-			/* status > 0 */
+			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '#') {
+				free (buffer);
+				buffer = NULL;
+				break;
+			}
+			i=0;
+			memset (chunk_len_str, 0, 12);
+			while ((ret = recv (client, &c, 1, 0) == 1 && (isdigit(c) || c == '#'))) {
+				if (i==0 && c == '#') {
+					if (recv (client, &c, 1, 0) != 1 || c != '\n') {
+						/* end but invalid */
+						free (buffer);
+						buffer = NULL;
+					}
+					/* end of message, double-loop break */
+					goto msg_complete;
+				}
+				chunk_len_str[i++] = c;
+			}
+			if (c != '\n') {
+				free (buffer);
+				buffer = NULL;
+				break;
+			}
+			if ((chunk_len = atoi (chunk_len_str)) == 0) {
+				free (buffer);
+				buffer = NULL;
+				break;
+			}
+			buffer_size += chunk_len+1;
+			buffer = realloc (buffer, sizeof(char)*buffer_size);
+			if ((ret = recv (client, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
+				free (buffer);
+				buffer = NULL;
+				break;
+			}
+			buffer_len += ret;
+		}
+msg_complete:
 
 		if (buffer != NULL) {
 			request = json_tokener_parse(buffer);
@@ -1172,14 +1196,19 @@ void * thread_routine (void * arg)
 			}
 			json_object_put(request);
 
-				/* send reply to caller */
-				if (reply != NULL) {
-					msgtext = json_object_to_json_string(reply);
-					send(client, msgtext, strlen(msgtext) + 1, 0);
-					json_object_put(reply);
-				} else {
+			/* send reply to caller */
+			if (reply != NULL) {
+				msgtext = json_object_to_json_string(reply);
+				if (asprintf (&chunked_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
+					free (buffer);
 					break;
 				}
+				send(client, chunked_msg, strlen(chunked_msg) + 1, 0);
+				json_object_put(reply);
+				free (chunked_msg);
+				free (buffer);
+			} else {
+				break;
 			}
 		}
 	}
