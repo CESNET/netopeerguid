@@ -909,7 +909,7 @@ msg_complete:
 
 				//ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "get filter: %p", filter);
 
-				if ((data = netconf_get(server, netconf_sessions_list, session_key, NULL)) == NULL) {
+				if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("get failed."));
