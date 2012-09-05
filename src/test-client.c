@@ -186,18 +186,18 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_CONNECT));
-		readline(&line, &len, "Hostname:");
+		readline(&line, &len, "Hostname: ");
 		json_object_object_add(msg, "host", json_object_new_string(line));
-		readline(&line, &len, "Port:");
+		readline(&line, &len, "Port: ");
 		json_object_object_add(msg, "port", json_object_new_string(line));
-		readline(&line, &len, "Username:");
+		readline(&line, &len, "Username: ");
 		json_object_object_add(msg, "user", json_object_new_string(line));
-		printf("Password: ");
 		system("stty -echo");
-		getline (&line, &len, stdin);
+		readline(&line, &len, "Password: ");
 		system("stty echo");
 		printf("\n");
 		json_object_object_add(msg, "pass", json_object_new_string(line));
+
 		/* clean read password - it is needless because we have a copy in json... :-( */
 		memset(line, 'X', len);
 		free(line);
