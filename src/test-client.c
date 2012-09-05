@@ -46,6 +46,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <err.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -93,6 +94,57 @@ void print_help(char* progname)
 	printf("\tgeneric\n");
 }
 
+/**
+ * \brief Get multiline input text.
+ *
+ * Print given prompt and read text ending with CTRL+D.
+ * Output string is terminated by 0. Ending '\n' is removed.
+ *
+ * On error, err is called!
+ *
+ * \param[out] output - pointer to memory where string is stored
+ * \param[out] size - size of string return by getdelim()
+ * \param[in] prompt - text printed as a prompt
+ */
+void readmultiline(char **output, size_t *size, const char *prompt)
+{
+	printf(prompt);
+	if (getdelim (output, size, 'D' - 0x40, stdin) == -1) {
+		if (errno) {
+			err(errno, "Cannot read input.");
+		}
+		*output = (char *) malloc(sizeof(char));
+		**output = 0;
+		return;
+	}
+	(*output)[(*size)-1] = 0; /* input text end "sanitation" */
+	(*output)[(strlen(*output))-1] = 0; /* input text end "sanitation" */
+}
+
+/**
+ * \brief Get input text.
+ *
+ * Print given prompt and read one line of text.
+ * Output string is terminated by 0. Ending '\n' is removed.
+ *
+ * On error, err is called!
+ *
+ * \param[out] output - pointer to memory where string is stored
+ * \param[out] size - size of string return by getline()
+ * \param[in] prompt - text printed as a prompt
+ */
+void readline(char **output, size_t *size, const char *prompt)
+{
+	printf(prompt);
+	if (getline (output, size, stdin) == -1) {
+		if (errno) {
+			err(errno, "Cannot read input.");
+		}
+	}
+	(*output)[(*size)-1] = 0; /* input text end "sanitation" */
+	(*output)[(strlen(*output))-1] = 0; /* input text end "sanitation" */
+}
+
 int main (int argc, char* argv[])
 {
 	json_object* msg = NULL, *reply = NULL, *capabilities = NULL;
@@ -134,46 +186,40 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_CONNECT));
-		printf("Hostname: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Hostname:");
 		json_object_object_add(msg, "host", json_object_new_string(line));
-		printf("Port: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Port:");
 		json_object_object_add(msg, "port", json_object_new_string(line));
-		printf("Username: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Username:");
 		json_object_object_add(msg, "user", json_object_new_string(line));
 		printf("Password: ");
 		system("stty -echo");
 		getline (&line, &len, stdin);
 		system("stty echo");
 		printf("\n");
-		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "pass", json_object_new_string(line));
-      printf("Supported capabilities\n");
-      capabilities = json_object_new_array();
-      json_object_object_add(msg, "capabilities", capabilities);
-      while (1) {
-         printf("Next capability (empty for end): ");
-		   getline (&line, &len, stdin);
-         if (line == NULL || strcmp(line,"\n") == 0) {
-            break;
-         }
-         line[(strlen(line)-1)] = 0;
-         json_object_array_add (capabilities, json_object_new_string(line));
-      }
+		/* clean read password - it is needless because we have a copy in json... :-( */
+		memset(line, 'X', len);
+		free(line);
+		line = NULL;
+
+		printf("Supported capabilities\n");
+		capabilities = json_object_new_array();
+		json_object_object_add(msg, "capabilities", capabilities);
+		while (1) {
+			readline(&line, &len, "Next capability (empty for end): ");
+			if (strlen(line) == 0) {
+				break;
+			}
+			json_object_array_add (capabilities, json_object_new_string(line));
+		}
 	} else if (strcmp(argv[1], "disconnect") == 0) {
 		/*
 		 * Close NETCONF session
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_DISCONNECT));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
 	} else if (strcmp(argv[1], "copy-config") == 0) {
 		/*
@@ -181,24 +227,16 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_COPYCONFIG));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Source (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Source (running|startup|candidate): ");
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "source", json_object_new_string(line));
 		} else {
-			printf("Configuration data (ending with CTRL+D): ");
-			getdelim (&line, &len, 'D' - 0x40, stdin);
-			line[(strlen(line)-1)] = 0;
+			readmultiline(&line, &len, "Configuration data (ending with CTRL+D): ");
 			json_object_object_add(msg, "config", json_object_new_string(line));
 		}
-		printf("Target (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Target (running|startup|candidate): ");
 		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "delete-config") == 0) {
 		/*
@@ -206,13 +244,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_DELETECONFIG));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Target (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Target (running|startup|candidate): ");
 		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "edit-config") == 0) {
 		/*
@@ -220,29 +254,19 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_EDITCONFIG));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Target (running|startup|candidate): ");
-		getline(&line, &len, stdin);
-		line[(strlen(line) - 1)] = 0;
+		readline(&line, &len, "Target (running|startup|candidate): ");
 		json_object_object_add(msg, "target", json_object_new_string(line));
-		printf("Default operation (merge|replace|none): ");
-		getline(&line, &len, stdin);
-		line[(strlen(line) - 1)] = 0;
+		readline(&line, &len, "Default operation (merge|replace|none): ");
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "default-operation", json_object_new_string(line));
 		}
-		printf("Error option (stop-on-error|continue-on-error|rollback-on-error): ");
-		getline(&line, &len, stdin);
-		line[(strlen(line) - 1)] = 0;
+		readline(&line, &len, "Error option (stop-on-error|continue-on-error|rollback-on-error): ");
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "error-option", json_object_new_string(line));
 		}
-		printf("Configuration data (ending with CTRL+D): ");
-		getdelim(&line, &len, 'D' - 0x40, stdin);
-		line[(strlen(line) - 1)] = 0;
+		readmultiline(&line, &len, "Configuration data (ending with CTRL+D): ");
 		json_object_object_add(msg, "config", json_object_new_string(line));
 	} else if (strcmp(argv[1], "get") == 0) {
 		/*
@@ -250,13 +274,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_GET));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Filter: ");
-		getline(&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readmultiline(&line, &len, "Filter (ending with CTRL+D): ");
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "filter", json_object_new_string(line));
 		}
@@ -266,17 +286,11 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_GETCONFIG));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Source (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Source (running|startup|candidate): ");
 		json_object_object_add(msg, "source", json_object_new_string(line));
-		printf("Filter: ");
-		getline(&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readmultiline(&line, &len, "Filter (ending with CTRL+D): ");
 		if (strlen(line) > 0) {
 			json_object_object_add(msg, "filter", json_object_new_string(line));
 		}
@@ -286,13 +300,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_KILL));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Kill session with ID: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Kill session with ID: ");
 		json_object_object_add(msg, "session-id", json_object_new_string(line));
 	} else if (strcmp(argv[1], "lock") == 0) {
 		/*
@@ -300,13 +310,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_LOCK));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Target (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Target (running|startup|candidate): ");
 		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "unlock") == 0) {
 		/*
@@ -314,13 +320,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_UNLOCK));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len,"Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("Target (running|startup|candidate): ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Target (running|startup|candidate): ");
 		json_object_object_add(msg, "target", json_object_new_string(line));
 	} else if (strcmp(argv[1], "info") == 0) {
 		/*
@@ -328,9 +330,7 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_INFO));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
 	} else if (strcmp(argv[1], "generic") == 0) {
 		/*
@@ -338,13 +338,9 @@ int main (int argc, char* argv[])
 		 */
 		msg = json_object_new_object();
 		json_object_object_add(msg, "type", json_object_new_int(MSG_GENERIC));
-		printf("Session: ");
-		getline (&line, &len, stdin);
-		line[(strlen(line)-1)] = 0;
+		readline(&line, &len, "Session: ");
 		json_object_object_add(msg, "session", json_object_new_string(line));
-		printf("NETCONF <rpc> content: ");
-		getline(&line, &len, stdin);
-		line[(strlen(line) - 1)] = 0;
+		readmultiline(&line, &len, "NETCONF <rpc> content (ending with CTRL+D): ");
 		json_object_object_add(msg, "content", json_object_new_string(line));
 	} else {
 		/*
