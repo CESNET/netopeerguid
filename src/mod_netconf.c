@@ -863,7 +863,8 @@ msg_complete:
 				port = json_object_get_string(json_object_object_get(request, "port"));
 				user = json_object_get_string(json_object_object_get(request, "user"));
 				pass = json_object_get_string(json_object_object_get(request, "pass"));
-            if ((capabilities = json_object_object_get(request, "capabilities")) != NULL || (len = json_object_array_length(capabilities)) != 0) {
+				capabilities = json_object_object_get(request, "capabilities");
+            if ((capabilities != NULL) && ((len = json_object_array_length(capabilities)) > 0)) {
                   cpblts = nc_cpblts_new (NULL);
                   for (i=0; i<len; i++) {
                      nc_cpblts_add (cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
