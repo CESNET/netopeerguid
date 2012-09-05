@@ -227,20 +227,15 @@ void netconf_callback_error_process(const char* tag,
 	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
 }
 
-static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass)
+static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
 {
 	struct nc_session* session;
 	struct session_with_mutex * locked_session;
 	char *session_key;
-	struct nc_cpblts * cpblts = nc_session_get_cpblts_default ();
-
-	nc_cpblts_add(cpblts, "urn:cesnet:tmc:netopeer:1.0");
 
 	/* connect to the requested NETCONF server */
 	password = (char*)pass;
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
-
-	nc_cpblts_free (cpblts);
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
@@ -708,15 +703,15 @@ void * thread_routine (void * arg)
 	ssize_t buffer_len;
 	struct pollfd fds;
 	int status, buffer_size, ret;
-	json_object *request, *reply, *json_obj;
+	json_object *request, *reply, *json_obj, *capabilities;
 	int operation;
-	int i, chunk_len;
+	int i, chunk_len, len = 0;
 	char* session_key, *data;
 	const char *host, *port, *user, *pass;
 	const char *msgtext, *cpbltstr;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
 	struct nc_session *session = NULL;
-	struct nc_cpblts* cpblts;
+	struct nc_cpblts* cpblts = NULL;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = 0;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
@@ -868,12 +863,21 @@ msg_complete:
 				port = json_object_get_string(json_object_object_get(request, "port"));
 				user = json_object_get_string(json_object_object_get(request, "user"));
 				pass = json_object_get_string(json_object_object_get(request, "pass"));
+            if ((capabilities = json_object_object_get(request, "capabilities")) != NULL || (len = json_object_array_length(capabilities)) != 0) {
+                  cpblts = nc_cpblts_new (NULL);
+                  for (i=0; i<len; i++) {
+                     nc_cpblts_add (cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
+                  }
+            } else {
+               ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
+            }
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
 				if ((host == NULL) || (user == NULL)) {
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
 					session_key = NULL;
 				} else {
-					session_key = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass);
+					session_key = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass, cpblts);
+               nc_cpblts_free (cpblts);
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
 				}
 

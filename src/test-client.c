@@ -95,7 +95,7 @@ void print_help(char* progname)
 
 int main (int argc, char* argv[])
 {
-	json_object* msg = NULL, *reply = NULL;
+	json_object* msg = NULL, *reply = NULL, *capabilities = NULL;
 	const char* msg_text;
 	int sock;
 	struct sockaddr_un addr;
@@ -153,6 +153,18 @@ int main (int argc, char* argv[])
 		printf("\n");
 		line[(strlen(line)-1)] = 0;
 		json_object_object_add(msg, "pass", json_object_new_string(line));
+      printf("Supported capabilities\n");
+      capabilities = json_object_new_array();
+      json_object_object_add(msg, "capabilities", capabilities);
+      while (1) {
+         printf("Next capability (empty for end): ");
+		   getline (&line, &len, stdin);
+         if (line == NULL || strcmp(line,"\n") == 0) {
+            break;
+         }
+         line[(strlen(line)-1)] = 0;
+         json_object_array_add (capabilities, json_object_new_string(line));
+      }
 	} else if (strcmp(argv[1], "disconnect") == 0) {
 		/*
 		 * Close NETCONF session
