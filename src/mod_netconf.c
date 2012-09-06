@@ -711,6 +711,7 @@ void * thread_routine (void * arg)
 	const char *msgtext, *cpbltstr;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
 	struct nc_session *session = NULL;
+	struct session_with_mutex * locked_session;
 	struct nc_cpblts* cpblts = NULL;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = 0;
@@ -1141,7 +1142,12 @@ msg_complete:
 			case MSG_INFO:
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
 
-				session = (struct nc_session *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+				if (locked_session != NULL) {
+					session = locked_session->session;
+				} else {
+					session = NULL;
+				}
 				if (session != NULL) {
 					json_object_object_add(reply, "sid", json_object_new_string(nc_session_get_id(session)));
 					json_object_object_add(reply, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
