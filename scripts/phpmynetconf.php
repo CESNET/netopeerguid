@@ -62,6 +62,64 @@ class MsgType {
 	const MSG_GENERIC	= 15;
 };
 
+function unwrap_rfc6242($message)
+{
+	$response = "";
+	if ($message == "") {
+		return $response;
+	}
+	$chunks = explode("\n#", $message);
+	$numchunks = sizeof($chunks);
+	$i = 0;
+	if ($numchunks > 0) {
+		do {
+			if ($i == 0 && $chunks[$i++] != "") {
+				/* something is wrong, message should start by '\n#'
+				 */
+				echo "Wrong message format, it is not according to RFC6242 (starting with \\n#).";
+				echo var_export($message, true);
+				throw new \ErrorException("Wrong message format, it is not according to RFC6242 (starting with \\n#).");
+			}
+			if ($i >= $numchunks) {
+				echo "Malformed message (RFC6242) - Bad amount of parts.";
+				echo var_export($message, true);
+				/* echo "chunk length<br>\n"; */
+				throw new \ErrorException("Malformed message (RFC6242) - Bad amount of parts.");
+			}
+			$len = 0;
+			sscanf($chunks[$i], "%i", $len);
+
+			/* echo "chunk data<br>\n"; */
+			$nl = strpos($chunks[$i], "\n");
+			if ($nl === false) {
+				echo "Malformed message (RFC6242) - There is no \\n after chunk-data size.";
+				echo var_export($message, true);
+				throw new \ErrorException("Malformed message (RFC6242) - There is no \\n after chunk-data size.");
+			}
+			$data = substr($chunks[$i], $nl + 1);
+			$realsize = strlen($data);
+			if ($realsize != $len) {
+				echo "Chunk $i has the length $realsize instead of $len.";
+				echo var_export($message, true);
+				throw new \ErrorException("Chunk $i has the length $realsize instead of $len.");
+			}
+			$response .= $data;
+			$i++;
+			if ($chunks[$i][0] == '#') {
+				/* ending part */
+				break;
+			}
+		} while ($i<$numchunks);
+	}
+
+	return $response;
+}
+
+function write2socket(&$sock, $message)
+{
+	$final_message = sprintf("\n#%d\n%s\n##\n", strlen($message), $message);
+	fwrite($sock, $final_message);
+}
 /**
   \brief Read response from socket
   \param[in,out] $sock socket descriptor
@@ -80,7 +138,12 @@ function readnetconf(&$sock)
 			break;
 		}
 	} while ($tmp != "");
-	return trim($response);
+	try {
+		return unwrap_rfc6242($response);
+	} catch (\Exception $e) {
+		echo $e;
+		return "";
+	}
 }
 
 function printJsonError() {
@@ -124,17 +187,19 @@ function printxml($string)
 */
 function handle_connect(&$sock)
 {
+	$capabilities = explode("\n", trim(str_replace("\r", "", $_REQUEST["capab"])));
 	$connect = json_encode(array("type" => MsgType::MSG_CONNECT,
 	"host" => $_REQUEST["host"],
 	"port" => 22,
 	"user" => $_REQUEST["user"],
-	"pass" => $_REQUEST["pass"]
+	"pass" => $_REQUEST["pass"],
+	"capabilities" => $capabilities,
 	));
-	fwrite($sock, $connect);
+	write2socket($sock, $connect);
 	$response = readnetconf($sock);
 	$decoded = json_decode($response, true);
 	echo "<h2>CONNECT</h2>";
-	if ($decoded["type"] == MsgType::REPLY_OK) {
+	if ($decoded && ($decoded["type"] == MsgType::REPLY_OK)) {
 		$sessionkey = $decoded["session"];
 		if (!isset($_SESSION["keys"])) {
 			$_SESSION["keys"] = array("$sessionkey");
@@ -149,8 +214,8 @@ function handle_connect(&$sock)
 		echo "Successfully connected.";
 		return 0;
 	} else {
-		echo "Could not connect.";
-		var_dump($decoded);
+		echo "Could not connect.<br>";
+		echo "Result: ". var_export($decoded, true);
 		return 1;
 	}
 }
@@ -183,7 +248,7 @@ function check_logged_keys()
 function execute_operation(&$sock, $params)
 {
 	$operation = json_encode($params);
-	fwrite($sock, $operation);
+	write2socket($sock, $operation);
 	$response = readnetconf($sock);
 	return json_decode($response, true);
 }
@@ -207,7 +272,7 @@ function handle_get(&$sock)
 	}
 	$decoded = execute_operation($sock, $params);
 
-	echo "<h2>GET-CONFIG</h2>";
+	echo "<h2>GET</h2>";
 	printxml($decoded["data"]);
 }
 
@@ -353,6 +418,7 @@ if (isset($_REQUEST["getconfig"])) {
 
 
 /* print mainpage */
+echo "<html><head><title>phpMyNetconf</title><body>";
 if (!isset($_REQUEST["command"])) {
 	echo "<h2>Connect to new NETCONF server</h2>
 	<form action='?' method='POST'>
@@ -360,9 +426,20 @@ if (!isset($_REQUEST["command"])) {
 	<label for='host'>Hostname:</label><input type='text' name='host'><br>
 	<label for='user'>Username:</label><input type='text' name='user'><br>
 	<label for='pass'>Password:</label><input type='password' name='pass'><br>
+	<label for='capab'>Capabilities:</label><br><textarea name='capab' rows=10 cols=100>
+urn:ietf:params:netconf:base:1.0
+urn:ietf:params:netconf:base:1.1
+urn:ietf:params:netconf:capability:startup:1.0
+urn:ietf:params:netconf:capability:writable-running:1.0
+urn:ietf:params:netconf:capability:candidate:1.0
+urn:ietf:params:netconf:capability:with-defaults:1.0?basic-mode=explicit&amp;also-supported=report-all,report-all-tagged,trim,explicit
+urn:cesnet:tmc:comet:1.0
+urn:cesnet:tmc:combo:1.0
+urn:cesnet:tmc:hanicprobe:1.0
+</textarea><br>
 	<input type='submit' value='Login'>
 	</form>";
-	if (isset($_SESSION["keys"])) {
+	if (isset($_SESSION["keys"]) && sizeof($_SESSION["keys"])) {
 		echo "<h2>Already connected nodes</h2>";
 		$keys = $_SESSION["keys"];
 		$i = 0;
@@ -427,7 +504,6 @@ if (isset($_REQUEST["command"])) {
 		printf("Not implemented yet. (%s)", $_REQUEST["command"]);
 	}
 	fclose($sock);
-	exit(0);
 }
-
+echo "</body></html>";
 
