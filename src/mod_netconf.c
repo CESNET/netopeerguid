@@ -308,6 +308,10 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 
 		return (EXIT_SUCCESS);
 	} else {
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to close");
 		return (EXIT_FAILURE);
 	}
