@@ -78,6 +78,10 @@
 #define offsetof(type, member) ((size_t) ((type *) 0)->member)
 #endif
 
+/* timeout in msec */
+#define NCRPCTIMEOUT	1000
+#define NCWITHDEFAULTS	NCWD_MODE_DISABLED
+
 struct timeval timeout = { 1, 0 };
 
 typedef enum MSG_TYPE {
@@ -293,7 +297,7 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 		free (locked_session);
 	}
 	if (ns != NULL) {
-		nc_session_close (ns, "NETCONF session closed by client");
+		nc_session_close (ns, NC_SESSION_TERM_CLOSED);
 		nc_session_free (ns);
 		ns = NULL;
 
@@ -352,7 +356,7 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 		}
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, &reply) == 0) {
+		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
 				/* first release exclusive lock for this session */
@@ -435,7 +439,7 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 		}
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, &reply) == 0) {
+		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
 				/* first release exclusive lock for this session */
@@ -498,7 +502,7 @@ static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, const char
 	}
 
 	/* create requests */
-	rpc = nc_rpc_getconfig (source, f);
+	rpc = nc_rpc_getconfig (source, f, NCWITHDEFAULTS);
 	nc_filter_free(f);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
@@ -522,7 +526,7 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, const char* sess
 	}
 
 	/* create requests */
-	rpc = nc_rpc_get (f);
+	rpc = nc_rpc_get (f, NCWITHDEFAULTS);
 	nc_filter_free(f);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
@@ -540,7 +544,7 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, const char*
 	int retval = EXIT_SUCCESS;
 
 	/* create requests */
-	rpc = nc_rpc_copyconfig(source, target, config);
+	rpc = nc_rpc_copyconfig(source, target, NCWITHDEFAULTS, config);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (EXIT_FAILURE);
@@ -643,7 +647,7 @@ static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* se
 	if (session != NULL) {
 		/* send the request and get the reply */
 		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, &reply) == 0) {
+		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
 			nc_rpc_free (rpc);
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
@@ -1022,7 +1026,7 @@ msg_complete:
 
 				if (source == NULL) {
 					/* no explicit source specified -> use config data */
-					ds_type_s = NC_DATASTORE_NONE;
+					ds_type_s = NC_DATASTORE_CONFIG;
 					config = json_object_get_string(json_object_object_get(request, "config"));
 				} else if (ds_type_s == -1) {
 					/* source datastore specified, but it is invalid */
