@@ -79,7 +79,6 @@
 #endif
 
 /* timeout in msec */
-#define NCRPCTIMEOUT	1000
 #define NCWITHDEFAULTS	NCWD_MODE_DISABLED
 
 struct timeval timeout = { 1, 0 };
@@ -327,6 +326,8 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 	struct session_with_mutex * locked_session;
 	nc_reply* reply;
 	int retval = EXIT_SUCCESS;
+	NC_MSG_TYPE msgt;
+	NC_REPLY_TYPE replyt;
 
 	/* check requests */
 	if (rpc == NULL) {
@@ -355,30 +356,8 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 			return EXIT_FAILURE;
 		}
 		/* send the request and get the reply */
-		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				/* first release exclusive lock for this session */
-				pthread_mutex_unlock(&locked_session->lock);
-				/* release read lock, netconf_close will get exclusive access and close this session */
-				if (pthread_rwlock_unlock (&session_lock) != 0) {
-					ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-					return EXIT_FAILURE;
-				}
-				netconf_close(server, conns, session_key);
-				return (EXIT_FAILURE);
-			}
-			/* first release exclusive lock for this session */
-			pthread_mutex_unlock(&locked_session->lock);
-			/* unlock before returning error */
-			if (pthread_rwlock_unlock (&session_lock) != 0) {
-				ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-				return EXIT_FAILURE;
-			}
-			/* there is error handled by callback */
-			return (EXIT_FAILURE);
-		}
+		msgt = nc_session_send_recv(session, rpc, &reply);
+
 		/* first release exclusive lock for this session */
 		pthread_mutex_unlock(&locked_session->lock);
 		/* end of critical section */
@@ -387,12 +366,32 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 			return EXIT_FAILURE;
 		}
 
-		switch (nc_reply_get_type (reply)) {
-		case NC_REPLY_OK:
-			retval = EXIT_SUCCESS;
+		/* process the result of the operation */
+		switch (msgt) {
+		case NC_MSG_UNKNOWN:
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				netconf_close(server, conns, session_key);
+				return (EXIT_FAILURE);
+			}
+			/* no break */
+		case NC_MSG_NONE:
+			/* there is error handled by callback */
+			return (EXIT_FAILURE);
+			break;
+		case NC_MSG_REPLY:
+			switch (replyt = nc_reply_get_type(reply)) {
+			case NC_REPLY_OK:
+				retval = EXIT_SUCCESS;
+				break;
+			default:
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
+				retval = EXIT_FAILURE;
+				break;
+			}
 			break;
 		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
 			retval = EXIT_FAILURE;
 			break;
 		}
@@ -408,8 +407,10 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 {
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
-	nc_reply* reply;
+	nc_reply* reply = NULL;
 	char* data;
+	NC_MSG_TYPE msgt;
+	NC_REPLY_TYPE replyt;
 
 	/* check requests */
 	if (rpc == NULL) {
@@ -438,51 +439,49 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 			return NULL;
 		}
 		/* send the request and get the reply */
-		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				/* first release exclusive lock for this session */
-				pthread_mutex_unlock(&locked_session->lock);
-				/* release read lock, netconf_close will get exclusive access and close this session */
-				if (pthread_rwlock_unlock (&session_lock) != 0) {
-					ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-					return NULL;
-				}
-				netconf_close(server, conns, session_key);
-				return (NULL);
-			}
-			/* first release exclusive lock for this session */
-			pthread_mutex_unlock(&locked_session->lock);
-			/* unlock before returning error */
-			if (pthread_rwlock_unlock (&session_lock) != 0) {
-				ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-				return NULL;
-			}
-			/* there is error handled by callback */
-			return (NULL);
-		}
+		msgt = nc_session_send_recv(session, rpc, &reply);
+
 		/* first release exclusive lock for this session */
 		pthread_mutex_unlock(&locked_session->lock);
 		/* end of critical section */
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
 			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-			return NULL;
+			return (NULL);
 		}
 
-		switch (nc_reply_get_type (reply)) {
-		case NC_REPLY_DATA:
-			if ((data = nc_reply_get_data (reply)) == NULL) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+		/* process the result of the operation */
+		switch (msgt) {
+		case NC_MSG_UNKNOWN:
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				netconf_close(server, conns, session_key);
 				return (NULL);
+			}
+			/* no break */
+		case NC_MSG_NONE:
+			/* there is error handled by callback */
+			return (NULL);
+			break;
+		case NC_MSG_REPLY:
+			switch (replyt = nc_reply_get_type(reply)) {
+			case NC_REPLY_DATA:
+				if ((data = nc_reply_get_data (reply)) == NULL) {
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+					data = NULL;
+				}
+				break;
+			default:
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
+				data = NULL;
+				break;
 			}
 			break;
 		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
-			return (NULL);
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
+			data = NULL;
+			break;
 		}
 		nc_reply_free(reply);
-
 		return (data);
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
@@ -632,6 +631,8 @@ static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* se
 	nc_reply* reply;
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
+	NC_MSG_TYPE msgt;
+	NC_REPLY_TYPE replyt;
 
 	/* create requests */
 	rpc = nc_rpc_generic(content);
@@ -640,39 +641,51 @@ static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* se
 		return (EXIT_FAILURE);
 	}
 
-	*data = NULL;
+	if (data != NULL) {
+		*data = NULL;
+	}
 
 	/* get session where send the RPC */
 	session = (struct nc_session *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (session != NULL) {
 		/* send the request and get the reply */
-		nc_session_send_rpc (session, rpc);
-		if (nc_session_recv_reply (session, NCRPCTIMEOUT, &reply) == 0) {
-			nc_rpc_free (rpc);
+		msgt = nc_session_send_recv(session, rpc, &reply);
+		nc_rpc_free (rpc);
+
+		/* process the result of the operation */
+		switch (msgt) {
+		case NC_MSG_UNKNOWN:
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
 				netconf_close(server, conns, session_key);
 				return (EXIT_FAILURE);
 			}
-
+			/* no break */
+		case NC_MSG_NONE:
 			/* there is error handled by callback */
 			return (EXIT_FAILURE);
-		}
-		nc_rpc_free (rpc);
-
-		switch (nc_reply_get_type (reply)) {
-		case NC_REPLY_DATA:
-			if ((*data = nc_reply_get_data (reply)) == NULL) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-				return (EXIT_FAILURE);
-			}
-			retval = EXIT_SUCCESS;
 			break;
-		case NC_REPLY_OK:
-			retval = EXIT_SUCCESS;
+		case NC_MSG_REPLY:
+			switch (replyt = nc_reply_get_type(reply)) {
+			case NC_REPLY_DATA:
+				if ((data != NULL) && (*data = nc_reply_get_data (reply)) == NULL) {
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+					nc_reply_free(reply);
+					return (EXIT_FAILURE);
+				}
+				retval = EXIT_SUCCESS;
+				break;
+			case NC_REPLY_OK:
+				retval = EXIT_SUCCESS;
+				break;
+			default:
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
+				retval = EXIT_FAILURE;
+				break;
+			}
 			break;
 		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply");
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
 			retval = EXIT_FAILURE;
 			break;
 		}
@@ -1409,7 +1422,7 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 	apr_status_t res;
 
 	/* These two help ensure that we only init once. */
-	void *data;
+	void *data = NULL;
 	const char *userdata_key = "netconf_ipc_init";
 
 	/*
@@ -1489,3 +1502,4 @@ module AP_MODULE_DECLARE_DATA netconf_module = {
 	netconf_cmds,			/* table of config file commands       */
 	mod_netconf_register_hooks	/* register hooks                      */
 };
+
