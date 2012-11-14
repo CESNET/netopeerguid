@@ -256,6 +256,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 		}
 		locked_session->session = session;
 		pthread_mutex_init (&locked_session->lock, NULL);
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
 		if (pthread_rwlock_wrlock (&session_lock) != 0) {
 			nc_session_free(session);
@@ -263,7 +264,9 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Add connection to the list");
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
 		/* end of critical section */
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
 			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
@@ -398,6 +401,10 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 		nc_reply_free(reply);
 		return (retval);
 	} else {
+		/* release lock on failure */
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		}
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
 		return (EXIT_FAILURE);
 	}
@@ -484,6 +491,10 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 		nc_reply_free(reply);
 		return (data);
 	} else {
+		/* release lock on failure */
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		}
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
 		return (NULL);
 	}
