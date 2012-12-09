@@ -125,8 +125,9 @@ function write2socket(&$sock, $message)
   \param[in,out] $sock socket descriptor
   \return trimmed string that was read
  */
-function readnetconf(&$sock)
+function readnetconf2(&$sock)
 {
+	$start = microtime(true);
 	$response = "";
 	do {
 		$tmp = "";
@@ -138,12 +139,63 @@ function readnetconf(&$sock)
 			break;
 		}
 	} while ($tmp != "");
+	$res = "";
 	try {
-		return unwrap_rfc6242($response);
+		$res = unwrap_rfc6242($response);
 	} catch (\Exception $e) {
 		echo $e;
 		return "";
 	}
+	echo "readnetconf elapsed time: ".(microtime(true) - $start);
+	return $res;
+}
+function readnetconf(&$sock) {
+	stream_set_blocking($sock, 1);
+	//stream_set_timeout($sock, 1, 100);
+//$start = microtime(true);
+	$response = "";
+	$tmp = "";
+	$tmp = fread($sock, 1024);
+	if ($tmp === false) {
+		$this->container->get('request')->getSession()->setFlash($this->flashState .' error', "Reading failure.");
+	}
+
+	$response = $tmp;
+	// message is wrapped in "\n#strlen($m)\n$m\n##\n"
+	// get size:
+	$lines = explode("\n", $tmp);
+	if (sizeof($lines >= 2)) {
+		$size = strlen($lines[0]) + 1 + strlen($lines[1]) + 1;
+		$size += intval(substr($lines[1], 1)) + 5;
+	}
+
+	while (strlen($response) < $size) {
+		$tmp = "";
+		$tmp = fread($sock, $size - strlen($response));
+		if ($tmp === false) {
+			#$this->container->get('request')->getSession()->setFlash($this->flashState .' error', "Reading failure.");
+			echo "reading failure";
+			die();
+		}
+		$response .= $tmp;
+		echo strlen($response) ."/". $size ."\n";
+	}
+	$status = stream_get_meta_data($sock);
+	if (!$response && $status["timed_out"] == true) {
+		#$this->container->get('request')->getSession()->setFlash($this->flashState .' error', "Reached timeout for reading response.");
+		echo "Reached timeout for reading response.";
+	}
+	/* "unchunk" frames (RFC6242) */
+	try {
+		$response = unwrap_rfc6242($response);
+	} catch (\ErrorException $e) {
+		#$this->container->get('request')->getSession()->setFlash($this->flashState .' error', "Could not read NetConf. Error: ".$e->getMessage());
+		echo "unwrap exception";
+		return 1;
+	}
+//echo "readnetconf time consumed: ". (microtime(true) - $start);
+
+	return trim($response);
 }
 
 function printJsonError() {
