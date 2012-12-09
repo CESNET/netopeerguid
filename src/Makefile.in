@@ -1,0 +1,74 @@
+PKGNAME = @PACKAGE_NAME@
+NAME=mod_netconf
+VERSION = $(shell cut -f1 ./VERSION | tr -d '\n')
+MAJOR_VER = $(shell echo $(VERSION) | cut -d. -f1)
+RELEASE = @RELEASE@
+RPMDIR = RPMBUILD
+RPMBUILD = @RPMBUILD@
+
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+datarootdir = @datarootdir@
+datadir = @datadir@
+bindir = @bindir@
+includedir = @includedir@
+libdir =  @libdir@
+mandir = @mandir@
+sysconfdir = @sysconfdir@
+
+APXS=/usr/sbin/apxs
+
+CFLAGS=-I/usr/include/json
+LIBS=-lnetconf -ljson
+
+SRCS=mod_netconf.c \
+     test-client.c
+
+all: module client
+
+module: mod_netconf.c
+	$(APXS) $(CPPFLAGS) $(CFLAGS) $(LIBS) -c mod_netconf.c
+
+client: test-client.c
+	gcc -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
+
+#install: $(NAME).la
+#	$(APXS) -i $(NAME).la
+
+.PHONY: install
+install: $(TARGETS)
+	[ -d $(DESTDIR)/etc/httpd/modules ] || \
+		(mkdir -p $(DESTDIR)/$(libdir)/httpd/modules; chmod 755 $(DESTDIR)/$(libdir)/httpd/modules)
+	[ -d $(DESTDIR)/$(sysconfdir)/httpd/conf.d/ ] || \
+		mkdir -p $(DESTDIR)/$(sysconfdir)/httpd/conf.d/; chmod 755 $(DESTDIR)/$(sysconfdir)/httpd/conf.d/;
+	cp .libs/mod_netconf.so $(DESTDIR)/$(libdir)/httpd/modules
+	cp mod_netconf.conf $(DESTDIR)/$(sysconfdir)/httpd/conf.d/
+
+.PHONY: clean
+clean:
+	rm -rf .libs *.la *.lo *.slo test-client
+
+.PHONY: tarball
+tarball: $(SRCS) $(HEADERS)
+	@rm -rf $(NAME)-$(VERSION);
+	@mkdir $(NAME)-$(VERSION);
+	for i in $(SRCS) $(HDRS) mod_netconf.conf README configure.in configure \
+	    Makefile.in VERSION $(NAME).spec.in install-sh; do \
+	    [ -d $(NAME)-$(VERSION)/$$(dirname $$i) ] || (mkdir -p $(NAME)-$(VERSION)/$$(dirname $$i)); \
+		cp $$i $(NAME)-$(VERSION)/$$i; \
+	done;
+	@rm -rf $(RPMDIR)/SOURCES/; \
+	mkdir -p $(RPMDIR)/SOURCES/; \
+	tar -c -z -f $(RPMDIR)/SOURCES/$(NAME)-$(VERSION)-$(RELEASE).tar.gz \
+	    $(NAME)-$(VERSION); \
+	rm -rf $(NAME)-$(VERSION);
+
+.PHONY: rpm
+rpm: tarball
+	mkdir -p $(RPMDIR)/BUILD $(RPMDIR)/RPMS $(RPMDIR)/SRPMS
+	$(RPMBUILD) -ba $(PKGNAME).spec \
+	--define "_topdir `pwd`/$(RPMDIR)";
+
+.PHONY: distclean
+distclean:
+	rm -rf $(RPMDIR)

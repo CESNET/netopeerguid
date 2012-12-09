@@ -1,0 +1,43 @@
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
+
+AC_PREREQ([2.63])
+AC_INIT([mod_netconf], [1.0])
+AC_CONFIG_SRCDIR([mod_netconf.c])
+
+# Checks for programs.
+#AC_PROG_CC
+AC_PROG_INSTALL
+
+# Check for rpmbuil
+AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild)
+
+RELEASE=1
+AC_SUBST(RELEASE)
+
+REQS="$REQS httpd php json-c"
+BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
+
+# Checks for libraries.
+AC_SEARCH_LIBS([ncds_apply_rpc],[netconf], ,AC_MSG_ERROR([libnetconf not found!]))
+REQS="$REQS libnetconf"
+BUILDREQS="$BUILDREQS libnetconf-devel"
+
+# Checks for header files.
+AC_CHECK_HEADER([libnetconf.h], ,AC_MSG_ERROR([libnetconf.h not found!]))
+
+# Checks for typedefs, structures, and compiler characteristics.
+
+# Checks for library functions.
+
+AC_SUBST(RPMBUILD)
+if test -z "$RPMBUILD"; then
+	AC_MSG_WARN([Due to missing rpmbuild you will not able to generate RPM package.])
+fi
+
+AC_SUBST(REQS)
+AC_SUBST(BUILDREQS)
+
+AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([mod_netconf.spec])
+AC_OUTPUT
