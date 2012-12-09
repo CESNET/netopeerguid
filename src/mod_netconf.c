@@ -921,10 +921,12 @@ msg_complete:
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connection failed.");
 					} else {
 						/* use filled err_reply from libnetconf's callback */
 						json_object_put(reply);
 						reply = err_reply;
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connect - error from libnetconf's callback.");
 					}
 				} else {
 					/* positive reply */
