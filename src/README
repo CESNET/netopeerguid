@@ -139,3 +139,8 @@ key: session (string), value: unique session identifier
 key: type (int), value: 15
 key: session (string), value: unique session identifier
 key: content (string), value: XML data as content of the NETCONF's <rpc> envelope
+
+13) get-schema
+key: type (int), value: 16
+key: session (string), value: unique session identifier
+key: identifier (string), value: identifier of schema

@@ -99,7 +99,8 @@ typedef enum MSG_TYPE {
 	MSG_UNLOCK,
 	MSG_KILL,
 	MSG_INFO,
-	MSG_GENERIC
+	MSG_GENERIC,
+	MSG_GETSCHEMA
 } MSG_TYPE;
 
 #define MSG_OK 0
@@ -524,6 +525,23 @@ static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, const char
 	return (data);
 }
 
+static char* netconf_getschema(server_rec* server, apr_hash_t* conns, const char* session_key, const char* identifier, const char* version, const char* format)
+{
+	nc_rpc* rpc;
+	char* data = NULL;
+
+	/* create requests */
+	rpc = nc_rpc_getschema (identifier, version, format);
+	if (rpc == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		return (NULL);
+	}
+
+	data = netconf_opdata(server, conns, session_key, rpc);
+	nc_rpc_free (rpc);
+	return (data);
+}
+
 static char* netconf_get(server_rec* server, apr_hash_t* conns, const char* session_key, const char* filter)
 {
 	nc_rpc* rpc;
@@ -742,6 +760,7 @@ void * thread_routine (void * arg)
 	const char *host, *port, *user, *pass;
 	const char *msgtext, *cpbltstr;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
+	char *identifier, *version, *format;
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
 	struct nc_cpblts* cpblts = NULL;
@@ -970,6 +989,32 @@ msg_complete:
 				}
 
 				if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type_s, filter)) == NULL) {
+					if (err_reply == NULL) {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
+					} else {
+						/* use filled err_reply from libnetconf's callback */
+						json_object_put(reply);
+						reply = err_reply;
+					}
+				} else {
+					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
+					json_object_object_add(reply, "data", json_object_new_string(data));
+				}
+				break;
+			case MSG_GETSCHEMA:
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-schema (session %s)", session_key);
+				identifier = json_object_get_string(json_object_object_get(request, "identifier"));
+				if (identifier == NULL) {
+					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+					json_object_object_add(reply, "error-message", json_object_new_string("No identifier for get-schema supplied."));
+					break;
+				}
+				version = json_object_get_string(json_object_object_get(request, "identifier"));
+				format = json_object_get_string(json_object_object_get(request, "identifier"));
+
+
+				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, version, format)) == NULL) {
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));

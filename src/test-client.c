@@ -73,7 +73,8 @@ typedef enum MSG_TYPE {
 	MSG_UNLOCK,
 	MSG_KILL,
 	MSG_INFO,
-	MSG_GENERIC
+	MSG_GENERIC,
+	MSG_GETSCHEMA
 } MSG_TYPE;
 
 void print_help(char* progname)
