@@ -5,6 +5,7 @@
  * \author Radek Krejci <rkrejci@cesnet.cz>
  * \date 2011
  * \date 2012
+ * \date 2013
  */
 /*
  * Copyright (C) 2011-2012 CESNET
@@ -65,6 +66,8 @@
 
 #include <libnetconf.h>
 
+#include "message_type.h"
+
 
 #define MAX_PROCS 5
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"
@@ -83,25 +86,6 @@
 
 struct timeval timeout = { 1, 0 };
 
-typedef enum MSG_TYPE {
-	REPLY_OK,
-	REPLY_DATA,
-	REPLY_ERROR,
-	REPLY_INFO,
-	MSG_CONNECT,
-	MSG_DISCONNECT,
-	MSG_GET,
-	MSG_GETCONFIG,
-	MSG_EDITCONFIG,
-	MSG_COPYCONFIG,
-	MSG_DELETECONFIG,
-	MSG_LOCK,
-	MSG_UNLOCK,
-	MSG_KILL,
-	MSG_INFO,
-	MSG_GENERIC,
-	MSG_GETSCHEMA
-} MSG_TYPE;
 
 #define MSG_OK 0
 #define MSG_OPEN  1
@@ -531,7 +515,7 @@ static char* netconf_getschema(server_rec* server, apr_hash_t* conns, const char
 	char* data = NULL;
 
 	/* create requests */
-	rpc = nc_rpc_getschema (identifier, version, format);
+	rpc = nc_rpc_getschema(identifier, version, format);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (NULL);
@@ -760,7 +744,7 @@ void * thread_routine (void * arg)
 	const char *host, *port, *user, *pass;
 	const char *msgtext, *cpbltstr;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
-	char *identifier, *version, *format;
+	const char *identifier, *version, *format;
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
 	struct nc_cpblts* cpblts = NULL;
@@ -1010,11 +994,12 @@ msg_complete:
 					json_object_object_add(reply, "error-message", json_object_new_string("No identifier for get-schema supplied."));
 					break;
 				}
-				version = json_object_get_string(json_object_object_get(request, "identifier"));
-				format = json_object_get_string(json_object_object_get(request, "identifier"));
+				version = json_object_get_string(json_object_object_get(request, "version"));
+				format = json_object_get_string(json_object_object_get(request, "format"));
 
-
-				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, version, format)) == NULL) {
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "get-schema(version: %s, format: %s)", version, format);
+//version, format
+				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, NULL, NULL)) == NULL) {
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));

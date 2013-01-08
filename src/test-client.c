@@ -2,7 +2,9 @@
  * \file test-client.c
  * \brief Testing client sending JSON requsts to the mod_netconf socket
  * \author Radek Krejci <rkrejci@cesnet.cz>
+ * \author Tomas Cejka <cejkat@cesnet.cz>
  * \date 2012
+ * \date 2013
  */
 /*
  * Copyright (C) 2012 CESNET
@@ -53,29 +55,10 @@
 #include <sys/un.h>
 #include <json/json.h>
 #include <ctype.h>
+#include "message_type.h"
 
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"
 #define BUFFER_SIZE 40960
-
-typedef enum MSG_TYPE {
-	REPLY_OK,
-	REPLY_DATA,
-	REPLY_ERROR,
-	REPLY_INFO,
-	MSG_CONNECT,
-	MSG_DISCONNECT,
-	MSG_GET,
-	MSG_GETCONFIG,
-	MSG_EDITCONFIG,
-	MSG_COPYCONFIG,
-	MSG_DELETECONFIG,
-	MSG_LOCK,
-	MSG_UNLOCK,
-	MSG_KILL,
-	MSG_INFO,
-	MSG_GENERIC,
-	MSG_GETSCHEMA
-} MSG_TYPE;
 
 void print_help(char* progname)
 {
@@ -93,6 +76,7 @@ void print_help(char* progname)
 	printf("\tunlock\n");
 	printf("\tinfo\n");
 	printf("\tgeneric\n");
+	printf("\tgetschema\n");
 }
 
 /**
@@ -343,6 +327,20 @@ int main (int argc, char* argv[])
 		json_object_object_add(msg, "session", json_object_new_string(line));
 		readmultiline(&line, &len, "NETCONF <rpc> content (ending with CTRL+D): ");
 		json_object_object_add(msg, "content", json_object_new_string(line));
+	} else if (strcmp(argv[1], "getschema") == 0) {
+		/*
+		 * Get information about NETCONF session
+		 */
+		msg = json_object_new_object();
+		json_object_object_add(msg, "type", json_object_new_int(MSG_GETSCHEMA));
+		readline(&line, &len, "Session: ");
+		json_object_object_add(msg, "session", json_object_new_string(line));
+		readline(&line, &len, "Identificator: ");
+		json_object_object_add(msg, "identifier", json_object_new_string(line));
+		readline(&line, &len, "Format [YIN]: ");
+		json_object_object_add(msg, "format", json_object_new_string(line));
+		readline(&line, &len, "Version: ");
+		json_object_object_add(msg, "version", json_object_new_string(line));
 	} else {
 		/*
 		 * Unknown request
