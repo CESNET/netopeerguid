@@ -998,8 +998,7 @@ msg_complete:
 				format = json_object_get_string(json_object_object_get(request, "format"));
 
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "get-schema(version: %s, format: %s)", version, format);
-//version, format
-				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, NULL, NULL)) == NULL) {
+				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, version, format)) == NULL) {
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
