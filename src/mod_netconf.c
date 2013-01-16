@@ -43,6 +43,7 @@
  * if advised of the possibility of such damage.
  *
  */
+static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 
 #include <unistd.h>
 #include <poll.h>

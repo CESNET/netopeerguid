@@ -57,6 +57,8 @@
 #include <ctype.h>
 #include "message_type.h"
 
+static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "RCSID" $";
+
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"
 #define BUFFER_SIZE 40960
 

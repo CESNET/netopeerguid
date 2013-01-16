@@ -6,6 +6,8 @@ RELEASE = @RELEASE@
 RPMDIR = RPMBUILD
 RPMBUILD = @RPMBUILD@
 
+IDGIT = "built from git $(shell git show --pretty=oneline | head -1 | cut -c -20)"
+IDNOGIT = "released as version $(VERSION)"
 prefix = @prefix@
 exec_prefix = @exec_prefix@
 datarootdir = @datarootdir@
@@ -15,6 +17,9 @@ includedir = @includedir@
 libdir =  @libdir@
 mandir = @mandir@
 sysconfdir = @sysconfdir@
+
+ARCSID = @ARCSID@
+RCSID = @RCSID@
 
 APXS=/usr/sbin/apxs
 
@@ -27,10 +32,10 @@ SRCS=mod_netconf.c \
 all: module client
 
 module: mod_netconf.c
-	$(APXS) $(CPPFLAGS) $(CFLAGS) $(LIBS) -c mod_netconf.c
+	$(APXS) $(LIBS) $(ARCSID) -c mod_netconf.c
 
 client: test-client.c
-	gcc -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
+	gcc $(RCSID) -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
 
 #install: $(NAME).la
 #	$(APXS) -i $(NAME).la

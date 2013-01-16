@@ -637,6 +637,8 @@ ac_includes_default="\
 
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
+ARCSID
+RCSID
 BUILDREQS
 REQS
 EGREP
@@ -1948,6 +1950,17 @@ fi
 
 RELEASE=1
 
+
+if test "`git show > /dev/null 2>&1;echo $?`" = "0"; then
+	RCSID="-DRCSID=\\\"\$(IDGIT)\\\""
+
+	ARCSID="-DARCSID='\\\"\$(IDGIT)\\\"'"
+        #CFLAGS="$CPPFLAGS -DARCSID='\\\"\$(IDGIT)\\\"' -DRCSID=\\\"\$(IDGIT)\\\""
+else
+	RCSID="-DRCSID=\\\"\$(IDNOGIT)\\\""
+	ARCSID="-DARCSID=\\\"\$(IDNOGIT)\\\""
+        #CFLAGS="$CPPFLAGS -DRCSID='\\\"\$(IDNOGIT)\\\"' -DRCSID=\\\"\$(IDNOGIT)\\\""
+fi
 
 REQS="$REQS httpd php json-c"
 BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
@@ -3750,6 +3763,9 @@ if test -z "$RPMBUILD"; then
 	{ $as_echo "$as_me:$LINENO: WARNING: Due to missing rpmbuild you will not able to generate RPM package." >&5
 $as_echo "$as_me: WARNING: Due to missing rpmbuild you will not able to generate RPM package." >&2;}
 fi
+
+
+
 
 
 
