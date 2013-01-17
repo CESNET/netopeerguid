@@ -83,9 +83,10 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #endif
 
 /* timeout in msec */
-#define NCWITHDEFAULTS	NCWD_MODE_DISABLED
-
 struct timeval timeout = { 1, 0 };
+
+#define NCWITHDEFAULTS	NCWD_MODE_NOTSET
+
 
 
 #define MSG_OK 0
@@ -498,7 +499,7 @@ static char* netconf_getconfig(server_rec* server, apr_hash_t* conns, const char
 	}
 
 	/* create requests */
-	rpc = nc_rpc_getconfig (source, f, NCWITHDEFAULTS);
+	rpc = nc_rpc_getconfig (source, f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
@@ -539,7 +540,7 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, const char* sess
 	}
 
 	/* create requests */
-	rpc = nc_rpc_get (f, NCWITHDEFAULTS);
+	rpc = nc_rpc_get (f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
@@ -551,13 +552,25 @@ static char* netconf_get(server_rec* server, apr_hash_t* conns, const char* sess
 	return (data);
 }
 
-static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config)
+static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
 
 	/* create requests */
-	rpc = nc_rpc_copyconfig(source, target, NCWITHDEFAULTS, config);
+	if ((source == NC_DATASTORE_CONFIG) || (source == NC_DATASTORE_URL)) {
+		if (target == NC_DATASTORE_URL) {
+			rpc = nc_rpc_copyconfig(source, target, config, url);
+		} else {
+			rpc = nc_rpc_copyconfig(source, target, config);
+		}
+	} else {
+		if (target == NC_DATASTORE_URL) {
+			rpc = nc_rpc_copyconfig(source, target, url);
+		} else {
+			rpc = nc_rpc_copyconfig(source, target);
+		}
+	}
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (EXIT_FAILURE);
@@ -568,13 +581,14 @@ static int netconf_copyconfig(server_rec* server, apr_hash_t* conns, const char*
 	return (retval);
 }
 
-static int netconf_editconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, const char* config)
+static int netconf_editconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
 {
 	nc_rpc* rpc;
 	int retval = EXIT_SUCCESS;
 
 	/* create requests */
-	rpc = nc_rpc_editconfig(target, defop, erropt, config);
+	/* TODO source NC_DATASTORE_CONFIG / NC_DATASTORE_URL  */
+	rpc = nc_rpc_editconfig(target, NC_DATASTORE_CONFIG, defop, erropt, testopt, config);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (EXIT_FAILURE);
@@ -750,7 +764,7 @@ void * thread_routine (void * arg)
 	struct session_with_mutex * locked_session;
 	struct nc_cpblts* cpblts = NULL;
 	NC_DATASTORE ds_type_s, ds_type_t;
-	NC_EDIT_DEFOP_TYPE defop_type = 0;
+	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
 
 	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
@@ -864,6 +878,7 @@ msg_complete:
 			}
 
 			/* get parameters */
+			/* TODO NC_DATASTORE_URL */
 			ds_type_t = -1;
 			if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
 				if (strcmp(target, "running") == 0) {
@@ -1030,7 +1045,7 @@ msg_complete:
 						break;
 					}
 				} else {
-					defop_type = 0;
+					defop_type = NC_EDIT_DEFOP_NOTSET;
 				}
 
 				erropt = json_object_get_string(json_object_object_get(request, "error-option"));
@@ -1063,7 +1078,9 @@ msg_complete:
 					break;
 				}
 
-				if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type_t, defop_type, erropt_type, config) != EXIT_SUCCESS) {
+				/* TODO url capability see netconf_editconfig */
+				/* TODO TESTSET - :validate:1.1 capability? http://tools.ietf.org/html/rfc6241#section-7.2 */
+				if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_NOTSET, config) != EXIT_SUCCESS) {
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("edit-config failed."));

@@ -1953,13 +1953,10 @@ RELEASE=1
 
 if test "`git show > /dev/null 2>&1;echo $?`" = "0"; then
 	RCSID="-DRCSID=\\\"\$(IDGIT)\\\""
-
 	ARCSID="-DARCSID='\\\"\$(IDGIT)\\\"'"
-        #CFLAGS="$CPPFLAGS -DARCSID='\\\"\$(IDGIT)\\\"' -DRCSID=\\\"\$(IDGIT)\\\""
 else
 	RCSID="-DRCSID=\\\"\$(IDNOGIT)\\\""
-	ARCSID="-DARCSID=\\\"\$(IDNOGIT)\\\""
-        #CFLAGS="$CPPFLAGS -DRCSID='\\\"\$(IDNOGIT)\\\"' -DRCSID=\\\"\$(IDNOGIT)\\\""
+	ARCSID="-DARCSID='\\\"\$(IDNOGIT)\\\"'"
 fi
 
 REQS="$REQS httpd php json-c"
