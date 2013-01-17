@@ -29,6 +29,8 @@ LIBS=-lnetconf -ljson
 SRCS=mod_netconf.c \
      test-client.c
 
+HDRS=message_type.h
+
 all: module client
 
 module: mod_netconf.c

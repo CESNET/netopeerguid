@@ -1119,7 +1119,7 @@ msg_complete:
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 					json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters - one of source and config is required."));
 				} else {
-					if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type_s, ds_type_t, config) != EXIT_SUCCESS) {
+					if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type_s, ds_type_t, config, "") != EXIT_SUCCESS) {
 						if (err_reply == NULL) {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 							json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
