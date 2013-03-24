@@ -696,6 +696,7 @@ SHELL'
 ac_subst_files=''
 ac_user_opts='
 enable_option_checking
+with_notifications
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1322,6 +1323,11 @@ if test -n "$ac_init_help"; then
      short | recursive ) echo "Configuration of mod_netconf 1.0:";;
    esac
   cat <<\_ACEOF
+
+Optional Packages:
+  --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
+  --without-PACKAGE       do not use PACKAGE (same as --with-PACKAGE=no)
+  --with-notifications    Enable notifications
 
 Some influential environment variables:
   CC          C compiler command
@@ -1950,6 +1956,7 @@ fi
 
 RELEASE=1
 
+LIBS="-lnetconf -ljson"
 
 if test "`git show > /dev/null 2>&1;echo $?`" = "0"; then
 	RCSID="-DRCSID=\\\"\$(IDGIT)\\\""
@@ -2990,6 +2997,7 @@ fi
 
 REQS="$REQS libnetconf"
 BUILDREQS="$BUILDREQS libnetconf-devel"
+CPPFLAGS=""
 
 # Checks for header files.
 ac_ext=c
@@ -3760,6 +3768,21 @@ if test -z "$RPMBUILD"; then
 	{ $as_echo "$as_me:$LINENO: WARNING: Due to missing rpmbuild you will not able to generate RPM package." >&5
 $as_echo "$as_me: WARNING: Due to missing rpmbuild you will not able to generate RPM package." >&2;}
 fi
+
+
+
+# Check whether --with-notifications was given.
+if test "${with_notifications+set}" = set; then
+  withval=$with_notifications;
+		CPPFLAGS=" -DWITH_NOTIFICATIONS "
+		LIBS="-lwebsockets $LIBS"
+
+else
+  CPPFLAGS="$CPPFLAGS"
+
+fi
+
+
 
 
 

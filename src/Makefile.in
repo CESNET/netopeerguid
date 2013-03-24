@@ -24,7 +24,8 @@ RCSID = @RCSID@
 APXS=/usr/sbin/apxs
 
 CFLAGS=-I/usr/include/json
-LIBS=-lnetconf -ljson
+CPPFLAGS=@CPPFLAGS@
+LIBS=@LIBS@
 
 SRCS=mod_netconf.c \
      test-client.c
@@ -34,10 +35,13 @@ HDRS=message_type.h
 all: module client
 
 module: mod_netconf.c
-	$(APXS) $(LIBS) $(ARCSID) -c mod_netconf.c
+	$(APXS) $(LIBS) $(ARCSID) $(CPPFLAGS) -c mod_netconf.c notification-server.c
 
 client: test-client.c
 	gcc $(RCSID) -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
+
+notification-test: notification-server.c
+	gcc $(RCSID) -std=gnu99 -Wall -g -lwebsockets -DTEST_NOTIFICATION_SERVER notification-server.c -o notification-test
 
 #install: $(NAME).la
 #	$(APXS) -i $(NAME).la

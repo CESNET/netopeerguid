@@ -8,7 +8,7 @@
  * \date 2013
  */
 /*
- * Copyright (C) 2011-2012 CESNET
+ * Copyright (C) 2011-2013 CESNET
  *
  * LICENSE TERMS
  *
@@ -50,6 +50,7 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/fcntl.h>
 #include <pthread.h>
 #include <ctype.h>
 
@@ -66,6 +67,10 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #include <json/json.h>
 
 #include <libnetconf.h>
+
+#ifdef WITH_NOTIFICATIONS
+#include "notification_module.h"
+#endif
 
 #include "message_type.h"
 
@@ -1320,8 +1325,11 @@ msg_complete:
  */
 static void forked_proc(apr_pool_t * pool, server_rec * server)
 {
+	struct timeval tv;
 	struct sockaddr_un local, remote;
 	int lsock, client, ret, i, pthread_count = 0;
+	char use_notifications = 0;
+	unsigned int olds = 0;
 	socklen_t len;
 	mod_netconf_cfg *cfg;
 	apr_hash_t *netconf_sessions_list;
@@ -1371,6 +1379,15 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		return;
 	}
 
+	#ifdef WITH_NOTIFICATIONS
+	if (notification_init(pool, server) == -1) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "libwebsockets initialization failed");
+		use_notifications = 0;
+	} else {
+		use_notifications = 1;
+	}
+	#endif
+
 	/* prepare internal lists */
 	netconf_sessions_list = apr_hash_make(pool);
 
@@ -1396,12 +1413,25 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		close (lsock);
 		return;
 	}
-
+	
+	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
 	while (isterminated == 0) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "waiting for another client's request");
+		gettimeofday(&tv, NULL);
+		#ifdef WITH_NOTIFICATIONS
+		if (((unsigned int)tv.tv_sec - olds) > 60) {
+			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "handling notifications");
+		}
+		if (use_notifications == 1) {
+			notification_handle();
+		}
+		#endif
 
 		/* open incoming connection if any */
 		len = sizeof(remote);
+		if (((unsigned int)tv.tv_sec - olds) > 60) {
+			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "accepting another client");
+			olds = tv.tv_sec;
+		}
 		client = accept(lsock, (struct sockaddr *) &remote, &len);
 		if (client == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
 			apr_sleep(SLEEP_TIME);
@@ -1453,6 +1483,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	free (ptids);
 
 	close(lsock);
+
+	#ifdef WITH_NOTIFICATIONS
+	notification_close();
+	#endif
 
 	/* destroy rwlock */
 	pthread_rwlock_destroy(&session_lock);

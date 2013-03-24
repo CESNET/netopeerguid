@@ -14,6 +14,7 @@ AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild)
 
 RELEASE=1
 AC_SUBST(RELEASE)
+LIBS="-lnetconf -ljson"
 
 if test "`git show > /dev/null 2>&1;echo $?`" = "0"; then
 	RCSID="-DRCSID=\\\"\$(IDGIT)\\\""
@@ -30,6 +31,7 @@ BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
 AC_SEARCH_LIBS([ncds_apply_rpc],[netconf], ,AC_MSG_ERROR([libnetconf not found!]))
 REQS="$REQS libnetconf"
 BUILDREQS="$BUILDREQS libnetconf-devel"
+CPPFLAGS=""
 
 # Checks for header files.
 AC_CHECK_HEADER([libnetconf.h], ,AC_MSG_ERROR([libnetconf.h not found!]))
@@ -43,11 +45,22 @@ if test -z "$RPMBUILD"; then
 	AC_MSG_WARN([Due to missing rpmbuild you will not able to generate RPM package.])
 fi
 
+
+AC_ARG_WITH([notifications],
+	[AC_HELP_STRING([--with-notifications], [Enable notifications])],
+	[
+		CPPFLAGS=" -DWITH_NOTIFICATIONS "
+		LIBS="-lwebsockets $LIBS"
+	],
+	[CPPFLAGS="$CPPFLAGS"]
+)
+
 AC_SUBST(REQS)
 AC_SUBST(BUILDREQS)
 AC_SUBST(CPPFLAGS)
 AC_SUBST(RCSID)
 AC_SUBST(ARCSID)
+AC_SUBST(LIBS)
 
 AC_CONFIG_FILES([Makefile])
 AC_CONFIG_FILES([mod_netconf.spec])
