@@ -626,7 +626,16 @@ static int netconf_onlytargetop(server_rec* server, apr_hash_t* conns, const cha
 
 static int netconf_deleteconfig(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target)
 {
-	return (netconf_onlytargetop(server, conns, session_key, target, nc_rpc_deleteconfig));
+	nc_rpc *rpc = NULL;
+	if (target != NC_DATASTORE_URL) {
+		rpc = nc_rpc_deleteconfig(target);
+	} else {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		/* rpc = nc_rpc_deleteconfig(target, const char *url); */
+		return (EXIT_FAILURE);
+	}
+
+	return netconf_op(server, conns, session_key, rpc);
 }
 
 static int netconf_lock(server_rec* server, apr_hash_t* conns, const char* session_key, NC_DATASTORE target)
@@ -722,16 +731,16 @@ void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
 	switch (level) {
 	case NC_VERB_ERROR:
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, clb_print_server, msg);
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, clb_print_server, "%s", msg);
 		break;
 	case NC_VERB_WARNING:
-		ap_log_error(APLOG_MARK, APLOG_WARNING, 0, clb_print_server, msg);
+		ap_log_error(APLOG_MARK, APLOG_WARNING, 0, clb_print_server, "%s", msg);
 		break;
 	case NC_VERB_VERBOSE:
-		ap_log_error(APLOG_MARK, APLOG_INFO, 0, clb_print_server, msg);
+		ap_log_error(APLOG_MARK, APLOG_INFO, 0, clb_print_server, "%s", msg);
 		break;
 	case NC_VERB_DEBUG:
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, clb_print_server, msg);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, clb_print_server, "%s", msg);
 		break;
 	}
 }
@@ -1392,8 +1401,11 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	pthread_t * ptids = calloc (1,sizeof(pthread_t));
 	struct timespec maxtime;
 	pthread_rwlockattr_t lock_attrs;
+	#ifdef WITH_NOTIFICATIONS
+	char use_notifications = 0;
+	#endif
 
-	/* wait at most 5 secons for every thread to terminate */
+	/* wait at most 5 seconds for every thread to terminate */
 	maxtime.tv_sec = 5;
 	maxtime.tv_nsec = 0;
 
