@@ -73,12 +73,15 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #endif
 
 #include "message_type.h"
-
+#include "mod_netconf.h"
 
 #define MAX_PROCS 5
 #define SOCKET_FILENAME "/tmp/mod_netconf.sock"
 #define MAX_SOCKET_CL 10
 #define BUFFER_SIZE 4096
+#define NOTIFICATION_QUEUE_SIZE 10
+#define ACTIVITY_CHECK_INTERVAL	10  /**< timeout in seconds, how often activity is checked */
+#define ACTIVITY_TIMEOUT	180  /**< timeout in seconds, after this time, session is automaticaly closed. */
 
 /* sleep in master process for non-blocking socket reading */
 #define SLEEP_TIME 200
@@ -93,7 +96,6 @@ struct timeval timeout = { 1, 0 };
 #define NCWITHDEFAULTS	NCWD_MODE_NOTSET
 
 
-
 #define MSG_OK 0
 #define MSG_OPEN  1
 #define MSG_DATA  2
@@ -103,30 +105,11 @@ struct timeval timeout = { 1, 0 };
 
 module AP_MODULE_DECLARE_DATA netconf_module;
 
-typedef struct {
-	apr_pool_t *pool;
-	apr_proc_t *forkproc;
-	char* sockname;
-} mod_netconf_cfg;
-
-struct pass_to_thread {
-	int client; /**< opened socket */
-	apr_pool_t * pool; /**< ?? */
-	server_rec * server; /**< ?? */
-	apr_hash_t * netconf_sessions_list; /**< ?? */
-};
-
-struct session_with_mutex {
-	struct nc_session * session; /**< netconf session */
-	pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
-};
-
 pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
 
 volatile int isterminated = 0;
 
 static char* password;
-
 
 static void signal_handler(int sign)
 {
@@ -247,6 +230,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 			return NULL;
 		}
 		locked_session->session = session;
+		locked_session->last_activity = apr_time_now();
 		pthread_mutex_init (&locked_session->lock, NULL);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
@@ -350,6 +334,7 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 			}
 			return EXIT_FAILURE;
 		}
+		locked_session->last_activity = apr_time_now();
 		/* send the request and get the reply */
 		msgt = nc_session_send_recv(session, rpc, &reply);
 
@@ -437,6 +422,7 @@ static char* netconf_opdata(server_rec* server, apr_hash_t* conns, const char* s
 			}
 			return NULL;
 		}
+		locked_session->last_activity = apr_time_now();
 		/* send the request and get the reply */
 		msgt = nc_session_send_recv(session, rpc, &reply);
 
@@ -1309,13 +1295,83 @@ msg_complete:
 			}
 		}
 	}
-
 	free (arg);
 
 	return retval;
 }
 
-/*
+/**
+ * \brief Close all open NETCONF sessions.
+ *
+ * During termination of mod_netconf, it is useful to close all remaining
+ * sessions. This function iterates over the list of sessions and close them
+ * all.
+ *
+ * \param[in] server  pointer to server_rec for logging
+ * \param[in] p  apr pool needed for hash table iterating
+ * \param[in] ht  hash table of session_with_mutex structs
+ */
+static void close_all_nc_sessions(server_rec* server, apr_pool_t *p, apr_hash_t *ht)
+{
+	apr_hash_index_t *hi;
+	void *val = NULL;
+	struct session_with_mutex *swm = NULL;
+	struct nc_session *ns = NULL;
+	const char *hashed_key = NULL;
+	apr_ssize_t hashed_key_length;
+
+	for (hi = apr_hash_first(p, ht); hi; hi = apr_hash_next(hi)) {
+		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
+		swm = (struct session_with_mutex *) val;
+		if (swm != NULL) {
+			pthread_mutex_lock(&swm->lock);
+			if (swm->session != NULL) {
+				ns = swm->session;
+				nc_session_close(ns, NC_SESSION_TERM_CLOSED);
+				nc_session_free(ns);
+				swm->session = NULL;
+			}
+			pthread_mutex_unlock(&swm->lock);
+		}
+	}
+}
+
+static void check_timeout_and_close(server_rec* server, apr_pool_t *p, apr_hash_t *ht)
+{
+	apr_hash_index_t *hi;
+	void *val = NULL;
+	struct nc_session *ns = NULL;
+	struct session_with_mutex *swm = NULL;
+	const char *hashed_key = NULL;
+	apr_ssize_t hashed_key_length;
+	apr_time_t current_time = apr_time_now();
+
+	for (hi = apr_hash_first(p, ht); hi; hi = apr_hash_next(hi)) {
+		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
+		swm = (struct session_with_mutex *) val;
+		if (swm == NULL) {
+			continue;
+		}
+		ns = swm->session;
+		if (ns == NULL) {
+			continue;
+		}
+		pthread_mutex_lock(&swm->lock);
+		if ((current_time - swm->last_activity) > apr_time_from_sec(ACTIVITY_TIMEOUT)) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
+			nc_session_close(ns, NC_SESSION_TERM_CLOSED);
+			nc_session_free (ns);
+			ns = NULL;
+			/* remove session from the active sessions list */
+			apr_hash_set(ht, hashed_key, APR_HASH_KEY_STRING, NULL);
+		}
+		pthread_mutex_unlock(&swm->lock);
+	}
+}
+
+
+/**
  * This is actually implementation of NETCONF client
  * - requests are received from UNIX socket in the predefined format
  * - results are replied through the same way
@@ -1328,8 +1384,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	struct timeval tv;
 	struct sockaddr_un local, remote;
 	int lsock, client, ret, i, pthread_count = 0;
-	char use_notifications = 0;
-	unsigned int olds = 0;
+	unsigned int olds = 0, timediff = 0;
 	socklen_t len;
 	mod_netconf_cfg *cfg;
 	apr_hash_t *netconf_sessions_list;
@@ -1417,14 +1472,18 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
 	while (isterminated == 0) {
 		gettimeofday(&tv, NULL);
+		timediff = (unsigned int)tv.tv_sec - olds;
 		#ifdef WITH_NOTIFICATIONS
-		if (((unsigned int)tv.tv_sec - olds) > 60) {
+		if (timediff > 60) {
 			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "handling notifications");
 		}
 		if (use_notifications == 1) {
 			notification_handle();
 		}
 		#endif
+		if (timediff > ACTIVITY_CHECK_INTERVAL) {
+			check_timeout_and_close(server, pool, netconf_sessions_list);
+		}
 
 		/* open incoming connection if any */
 		len = sizeof(remote);
@@ -1476,6 +1535,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Running %d threads", pthread_count);
 	}
 
+	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf terminating...");
 	/* join all threads */
 	for (i=0; i<pthread_count; i++) {
 		pthread_timedjoin_np (ptids[i], (void**)&arg, &maxtime);
@@ -1487,6 +1547,9 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	#ifdef WITH_NOTIFICATIONS
 	notification_close();
 	#endif
+
+	/* close all NETCONF sessions */
+	close_all_nc_sessions(server, pool, netconf_sessions_list);
 
 	/* destroy rwlock */
 	pthread_rwlock_destroy(&session_lock);
