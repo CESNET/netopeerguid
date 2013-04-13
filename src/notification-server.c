@@ -25,14 +25,23 @@
 #include <string.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/queue.h>
 #include <fcntl.h>
 #include <assert.h>
-#include "libwebsockets.h"
+#include <pthread.h>
+#include <libnetconf.h>
+#include <libwebsockets.h>
 #include "notification_module.h"
+#include "mod_netconf.h"
 
 #ifndef TEST_NOTIFICATION_SERVER
 #include <httpd.h>
 #include <http_log.h>
+#include <apr_hash.h>
+#include <apr_tables.h>
+
+#else
+static int force_exit = 0;
 #endif
 
 #if defined(TEST_NOTIFICATION_SERVER) || defined(WITH_NOTIFICATIONS)
@@ -42,9 +51,18 @@ static int max_poll_elements;
 static struct pollfd *pollfds;
 static int *fd_lookup;
 static int count_pollfds;
-static int force_exit = 0;
 static struct libwebsocket_context *context = NULL;
 static server_rec *http_server = NULL;
+
+extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
+
+struct ntf_thread_config {
+	struct nc_session *session;
+	char *session_hash;
+};
+
+static apr_hash_t *netconf_locked_sessions = NULL;
+static pthread_key_t thread_key;
 
 /*
  * This demo server shows how to use libwebsockets for one or more
@@ -236,8 +254,7 @@ bail:
 		libwebsockets_get_peer_addresses(context, wsi, (int)(long)in, client_name,
 			     sizeof(client_name), client_ip, sizeof(client_ip));
 
-		fprintf(stderr, "Received network connect from %s (%s)\n",
-							client_name, client_ip);
+		//fprintf(stderr, "Received network connect from %s (%s)\n", client_name, client_ip);
 		/* if we returned non-zero from here, we kill the connection */
 		break;
 
@@ -283,53 +300,51 @@ bail:
 	return 0;
 }
 
-/*
+/**
  * this is just an example of parsing handshake headers, you don't need this
  * in your code unless you will filter allowing connections by the header
  * content
  */
-
-static void
-dump_handshake_info(struct libwebsocket *wsi)
-{
-	int n;
-	static const char *token_names[WSI_TOKEN_COUNT] = {
-		/*[WSI_TOKEN_GET_URI]		=*/ "GET URI",
-		/*[WSI_TOKEN_HOST]		=*/ "Host",
-		/*[WSI_TOKEN_CONNECTION]	=*/ "Connection",
-		/*[WSI_TOKEN_KEY1]		=*/ "key 1",
-		/*[WSI_TOKEN_KEY2]		=*/ "key 2",
-		/*[WSI_TOKEN_PROTOCOL]		=*/ "Protocol",
-		/*[WSI_TOKEN_UPGRADE]		=*/ "Upgrade",
-		/*[WSI_TOKEN_ORIGIN]		=*/ "Origin",
-		/*[WSI_TOKEN_DRAFT]		=*/ "Draft",
-		/*[WSI_TOKEN_CHALLENGE]		=*/ "Challenge",
-
-		/* new for 04 */
-		/*[WSI_TOKEN_KEY]		=*/ "Key",
-		/*[WSI_TOKEN_VERSION]		=*/ "Version",
-		/*[WSI_TOKEN_SWORIGIN]		=*/ "Sworigin",
-
-		/* new for 05 */
-		/*[WSI_TOKEN_EXTENSIONS]	=*/ "Extensions",
-
-		/* client receives these */
-		/*[WSI_TOKEN_ACCEPT]		=*/ "Accept",
-		/*[WSI_TOKEN_NONCE]		=*/ "Nonce",
-		/*[WSI_TOKEN_HTTP]		=*/ "Http",
-		/*[WSI_TOKEN_MUXURL]	=*/ "MuxURL",
-	};
-	char buf[256];
-
-	for (n = 0; n < WSI_TOKEN_COUNT; n++) {
-		if (!lws_hdr_total_length(wsi, n))
-			continue;
-
-		lws_hdr_copy(wsi, buf, sizeof buf, n);
-
-		fprintf(stderr, "    %s = %s\n", token_names[n], buf);
-	}
-}
+//static void dump_handshake_info(struct libwebsocket *wsi)
+//{
+//	int n;
+//	static const char *token_names[WSI_TOKEN_COUNT] = {
+//		/*[WSI_TOKEN_GET_URI]		=*/ "GET URI",
+//		/*[WSI_TOKEN_HOST]		=*/ "Host",
+//		/*[WSI_TOKEN_CONNECTION]	=*/ "Connection",
+//		/*[WSI_TOKEN_KEY1]		=*/ "key 1",
+//		/*[WSI_TOKEN_KEY2]		=*/ "key 2",
+//		/*[WSI_TOKEN_PROTOCOL]		=*/ "Protocol",
+//		/*[WSI_TOKEN_UPGRADE]		=*/ "Upgrade",
+//		/*[WSI_TOKEN_ORIGIN]		=*/ "Origin",
+//		/*[WSI_TOKEN_DRAFT]		=*/ "Draft",
+//		/*[WSI_TOKEN_CHALLENGE]		=*/ "Challenge",
+//
+//		/* new for 04 */
+//		/*[WSI_TOKEN_KEY]		=*/ "Key",
+//		/*[WSI_TOKEN_VERSION]		=*/ "Version",
+//		/*[WSI_TOKEN_SWORIGIN]		=*/ "Sworigin",
+//
+//		/* new for 05 */
+//		/*[WSI_TOKEN_EXTENSIONS]	=*/ "Extensions",
+//
+//		/* client receives these */
+//		/*[WSI_TOKEN_ACCEPT]		=*/ "Accept",
+//		/*[WSI_TOKEN_NONCE]		=*/ "Nonce",
+//		/*[WSI_TOKEN_HTTP]		=*/ "Http",
+//		/*[WSI_TOKEN_MUXURL]	=*/ "MuxURL",
+//	};
+//	char buf[256];
+//
+//	for (n = 0; n < WSI_TOKEN_COUNT; n++) {
+//		if (!lws_hdr_total_length(wsi, n))
+//			continue;
+//
+//		//lws_hdr_copy(wsi, buf, sizeof buf, n);
+//
+//		//fprintf(stderr, "    %s = %s\n", token_names[n], buf);
+//	}
+//}
 
 /* dumb_increment protocol */
 
@@ -341,102 +356,320 @@ dump_handshake_info(struct libwebsocket *wsi)
  * connection.
  */
 
-struct per_session_data__dumb_increment {
+struct per_session_data__notif_client {
 	int number;
+	char *session_key;
+	struct nc_session *session;
 };
 
-//static void get_client_notification()
-//{
-//	/* get non-exclusive (read) access to sessions_list (conns) */
-//	if (pthread_rwlock_rdlock (&session_lock) != 0) {
-//		ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-//		return NULL;
-//	}
-//	/* get session where send the RPC */
-//	locked_session = (struct session_with_mutex *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
-//	if (locked_session != NULL) {
-//		session = locked_session->session;
-//	}
-//	if (session != NULL) {
-//		/* get exclusive access to session */
-//		if (pthread_mutex_lock(&locked_session->lock) != 0) {
-//			/* unlock before returning error */
-//			if (pthread_rwlock_unlock (&session_lock) != 0) {
-//				ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-//				return NULL;
-//			}
-//			return NULL;
-//		}
-//		/* send the request and get the reply */
-//		msgt = nc_session_send_recv(session, rpc, &reply);
-//
-//		/* first release exclusive lock for this session */
-//		pthread_mutex_unlock(&locked_session->lock);
-//		/* end of critical section */
-//		if (pthread_rwlock_unlock (&session_lock) != 0) {
-//			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-//			return (NULL);
-//		}
-//
-//		/* process the result of the operation */
-//		switch (msgt) {
-//		case NC_MSG_UNKNOWN:
-//			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-//				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-//				netconf_close(server, conns, session_key);
-//				return (NULL);
-//			}
-//			/* no break */
-//		case NC_MSG_NONE:
-//			/* there is error handled by callback */
-//			return (NULL);
-//			break;
-//		case NC_MSG_REPLY:
-//			switch (replyt = nc_reply_get_type(reply)) {
-//			case NC_REPLY_DATA:
-//				if ((data = nc_reply_get_data (reply)) == NULL) {
-//					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-//					data = NULL;
-//				}
-//				break;
-//			default:
-//				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-//				data = NULL;
-//				break;
-//			}
-//			break;
-//		default:
-//			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-//			data = NULL;
-//			break;
-//		}
-//		nc_reply_free(reply);
-//		return (data);
-//	} else {
-//		/* release lock on failure */
-//		if (pthread_rwlock_unlock (&session_lock) != 0) {
-//			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-//		}
-//		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-//		return (NULL);
-//	}
-//}
+struct session_with_mutex *get_ncsession_from_key(const char *session_key)
+{
+	struct session_with_mutex *locked_session = NULL;
+	if (session_key == NULL) {
+		return (NULL);
+	}
+	if (pthread_rwlock_wrlock(&session_lock) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		#endif
+		return (NULL);
+	}
+	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_locked_sessions, session_key, APR_HASH_KEY_STRING);
+	if (pthread_rwlock_unlock (&session_lock) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		#endif
+		return (NULL);
+	}
+	return locked_session;
+}
+
+/* rpc parameter is freed after the function call */
+static int send_recv_process(struct nc_session *session, const char* operation, nc_rpc* rpc)
+{
+	nc_reply *reply = NULL;
+	char *data = NULL;
+	int ret = EXIT_SUCCESS;
+
+	/* send the request and get the reply */
+	switch (nc_session_send_recv(session, rpc, &reply)) {
+	case NC_MSG_UNKNOWN:
+		if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: receiving rpc-reply failed.");
+			}
+			#endif
+			//cmd_disconnect(NULL);
+			ret = EXIT_FAILURE;
+			break;
+		}
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Unknown error occurred.");
+		}
+		#endif
+		ret = EXIT_FAILURE;
+		break;
+	case NC_MSG_NONE:
+		/* error occurred, but processed by callback */
+		break;
+	case NC_MSG_REPLY:
+		switch (nc_reply_get_type(reply)) {
+		case NC_REPLY_OK:
+			break;
+		case NC_REPLY_DATA:
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: recv: %s.", data = nc_reply_get_data (reply));
+				free(data);
+			}
+			#endif
+			break;
+		case NC_REPLY_ERROR:
+			/* wtf, you shouldn't be here !?!? */
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: operation failed, but rpc-error was not processed.");
+			}
+			#endif
+			ret = EXIT_FAILURE;
+			break;
+		default:
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: unexpected operation result.");
+			}
+			#endif
+			ret = EXIT_FAILURE;
+			break;
+		}
+		break;
+	default:
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Unknown error occurred.");
+		}
+		#endif
+		ret = EXIT_FAILURE;
+		break;
+	}
+	nc_rpc_free(rpc);
+	nc_reply_free(reply);
+
+	return (ret);
+}
+
+/**
+ * \brief Callback to store incoming notification
+ * \param [in] eventtime - time when notification occured
+ * \param [in] content - content of notification
+ */
+static void notification_fileprint (time_t eventtime, const char* content)
+{
+	char t[128];
+	struct session_with_mutex *target_session = NULL;
+	notification_t *ntf = NULL;
+	char *session_hash = NULL;
+
+	t[0] = 0;
+	strftime(t, sizeof(t), "%c", localtime(&eventtime));
+
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: eventTime: %s\n%s\n", t, content);
+	}
+	
+	/* \todo replace last_session_key with client identification */
+	session_hash = pthread_getspecific(thread_key);
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: fileprint getspecific (%s)", session_hash);
+	}
+	target_session = get_ncsession_from_key(session_hash);
+	if (target_session == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "no session found last_session_key (%s)", session_hash);
+		return;
+	}
+	if (pthread_mutex_lock(&target_session->lock) != 0) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		return;
+	}
+	if (target_session->notifications == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "target_session->notifications is NULL");
+		if (pthread_mutex_unlock(&target_session->lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			return;
+		}
+		return;
+	}
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: ready to push to notifications queue");
+	}
+	ntf = (notification_t *) apr_array_push(target_session->notifications);
+	if (ntf == NULL) {
+		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Failed to allocate element ");
+		if (pthread_mutex_unlock(&target_session->lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			return;
+		}
+		return;
+	}
+	ntf->eventtime = time(NULL);
+	//ntf->content = strdup("notifikace");
+	//ntf->eventtime = eventtime;
+	ntf->content = strdup(content);
+
+	if (http_server != NULL) {
+		ap_log_error (APLOG_MARK, APLOG_NOTICE, 0, http_server, "added notif to queue %u (%s)", (unsigned int) ntf->eventtime, "notifikace");
+	}
+
+	if (pthread_mutex_unlock(&target_session->lock) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		return;
+	}
+}
+
+/**
+ * \brief Thread for libnetconf notifications dispatch
+ * \param [in] arg - struct ntf_thread_config * with nc_session
+ */
+void* notification_thread(void* arg)
+{
+	struct ntf_thread_config *config = (struct ntf_thread_config*)arg;
+	#ifndef TEST_NOTIFICATION_SERVER
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notifications: in thread for libnetconf notifications");
+	}
+	#endif
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: pthread_key_create");
+	}
+	if (pthread_key_create(&thread_key, NULL) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: pthread_key_create failed");
+		}
+		#endif
+	}
+	pthread_setspecific(thread_key, config->session_hash);
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: dispatching");
+	}
+	ncntf_dispatch_receive(config->session, notification_fileprint);
+	#ifndef TEST_NOTIFICATION_SERVER
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notifications: ended thread for libnetconf notifications");
+	}
+	#endif
+	free(config);
+	return (NULL);
+}
+
+
+int notif_subscribe(struct session_with_mutex *locked_session, const char *session_hash, time_t start_time, time_t stop_time)
+{
+	time_t start = -1;
+	time_t stop = -1;
+	struct nc_filter *filter = NULL;
+	char *stream = NULL;
+	nc_rpc *rpc = NULL;
+	pthread_t thread;
+	struct ntf_thread_config *tconfig;
+	struct nc_session *session;
+
+	if (locked_session == NULL) {
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: no locked_session was given.");
+		}
+		return (EXIT_FAILURE);
+	}
+
+	session = locked_session->session;
+
+	start = time(NULL) + start_time;
+	stop = time(NULL) + stop_time;
+	if (http_server != NULL) { ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: history: %u %u", (unsigned int) start, (unsigned int) stop);
+	}
+
+	if (session == NULL) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: NETCONF session not established.");
+		}
+		#endif
+		return (EXIT_FAILURE);
+	}
+
+	/* check if notifications are allowed on this session */
+	if (nc_session_notif_allowed(session) == 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Notification subscription is not allowed on this session.");
+		}
+		#endif
+		return (EXIT_FAILURE);
+	}
+	/* check times */
+	if (start != -1 && stop != -1 && start > stop) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Subscription start time must be lower than the end time.");
+		}
+		#endif
+		return (EXIT_FAILURE);
+	}
+
+	/* create requests */
+	rpc = nc_rpc_subscribe(stream, filter, (start_time == 0)?NULL:&start, (stop_time == 0)?NULL:&stop);
+	nc_filter_free(filter);
+	if (rpc == NULL) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: creating an rpc request failed.");
+		}
+		#endif
+		return (EXIT_FAILURE);
+	}
+
+	if (send_recv_process(session, "subscribe", rpc) != 0) {
+		return (EXIT_FAILURE);
+	}
+	rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
+
+	tconfig = malloc(sizeof(struct ntf_thread_config));
+	tconfig->session = session;
+	tconfig->session_hash = strdup(session_hash);
+	if (http_server != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: creating libnetconf notification thread (%s).",
+		tconfig->session_hash);
+	}
+	if (pthread_create(&thread, NULL, notification_thread, tconfig) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: creating a thread for receiving notifications failed");
+		}
+		#endif
+		return (EXIT_FAILURE);
+	}
+	pthread_detach(thread);
+	return (EXIT_SUCCESS);
+}
 
 static int callback_notification(struct libwebsocket_context *context,
 			struct libwebsocket *wsi,
 			enum libwebsocket_callback_reasons reason,
-					       void *user, void *in, size_t len)
+			void *user, void *in, size_t len)
 {
-	int isnotif = 0;
-	int n, m;
-	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 512 + LWS_SEND_BUFFER_POST_PADDING];
+	int n = 0;
+	int m = 0;
+	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 4096 + LWS_SEND_BUFFER_POST_PADDING];
 	unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
-	struct per_session_data__dumb_increment *pss = (struct per_session_data__dumb_increment *)user;
-	#ifndef TEST_NOTIFICATION_SERVER
-	if (http_server != NULL) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "libwebsockets callback_notification");
-	}
-	#endif
+	struct per_session_data__notif_client *pss = (struct per_session_data__notif_client *)user;
+
+	//#ifndef TEST_NOTIFICATION_SERVER
+	//if (http_server != NULL) {
+	//	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "libwebsockets callback_notification");
+	//}
+	//#endif
 
 	switch (reason) {
 
@@ -447,8 +680,70 @@ static int callback_notification(struct libwebsocket_context *context,
 
 	case LWS_CALLBACK_SERVER_WRITEABLE:
 //		get_client_notification();
-		n = sprintf((char *)p, "not%d\n", pss->number++);
-		m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+		if (pss->session_key == NULL) {
+			return 0;
+		}
+		/*
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: prepare to SENDING");
+		}
+		*/
+
+		struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
+		if (ls == NULL) {
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notification: session not found");
+			}
+			return -1;
+		}
+		if (pthread_mutex_lock(&ls->lock) != 0) {
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notification: cannot lock session");
+			}
+			#endif
+		}
+		notification_t *notif = NULL;
+		if (ls->notifications == NULL) {
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notification: no notifications array");
+			}
+			#endif
+			pthread_mutex_unlock(&ls->lock);
+			return -1;
+		}
+
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications for session");
+		}
+
+		while ((notif = (notification_t *) apr_array_pop(ls->notifications)) != NULL) {
+			char t[128];
+			t[0] = 0;
+			strftime(t, sizeof(t), "%c", localtime(&notif->eventtime));
+			n = 0;
+			n = sprintf((char *)p, "%s\n", notif->content);
+			m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+			//free(notif->content);
+			//free(notif);
+		}
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications done");
+		}
+
+		if (pthread_mutex_unlock(&ls->lock) != 0) {
+			#ifndef TEST_NOTIFICATION_SERVER
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notification: cannot unlock session");
+			}
+			#endif
+		}
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: unlocked session lock");
+		}
+
+
 		if (m < n) {
 			lwsl_err("ERROR %d writing to di socket\n", n);
 			return -1;
@@ -461,6 +756,37 @@ static int callback_notification(struct libwebsocket_context *context,
 
 	case LWS_CALLBACK_RECEIVE:
 //		fprintf(stderr, "rx %d\n", (int)len);
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "received: (%s)", (char *)in);
+		}
+		#endif
+		if (pss->session_key == NULL) {
+			char session_key_buf[41];
+			int start = -1;
+			time_t stop = time(NULL) + 30;
+
+			strncpy((char *) session_key_buf, (const char *) in, 40);
+			session_key_buf[40] = '\0';
+			pss->session_key = strdup(session_key_buf);
+			sscanf(in+40, "%d %d", (int *) &start, (int *) &stop);
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: get key (%s) from (%s) (%i,%i)", pss->session_key, (char *) in, (int) start, (int) stop);
+			}
+			
+			/* TODO subscribe, map with ncnotif print callback */
+			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
+			if (ls == NULL) {
+				if (http_server != NULL) {
+					ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: session_key not found (%s)", pss->session_key);
+				}
+				return 0;
+			}
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: prepare to subscribe stream");
+			}
+			notif_subscribe(ls, pss->session_key, (time_t) start, (time_t) stop);
+		}
 		if (len < 6)
 			break;
 		if (strcmp((const char *)in, "reset\n") == 0)
@@ -498,23 +824,28 @@ static struct libwebsocket_protocols protocols[] = {
 	{
 		"notification-protocol",
 		callback_notification,
-		sizeof(struct per_session_data__dumb_increment),
-		10,
+		sizeof(struct per_session_data__notif_client),
+		80,
 	},
 	{ NULL, NULL, 0, 0 } /* terminator */
 };
 
 
-int notification_init(apr_pool_t * pool, server_rec * server)
+/**
+ * initialization of notification module
+ */
+int notification_init(apr_pool_t * pool, server_rec * server, apr_hash_t *conns)
 {
-	char cert_path[1024];
-	char key_path[1024];
-	int use_ssl = 0;
+	//char cert_path[1024];
+	//char key_path[1024];
+	//int use_ssl = 0;
 	struct lws_context_creation_info info;
 	int opts = 0;
-	char interface_name[128] = "";
+	//char interface_name[128] = "";
 	const char *iface = NULL;
 	int debug_level = 7;
+
+	netconf_locked_sessions = conns;
 
 	memset(&info, 0, sizeof info);
 	info.port = NOTIFICATION_SERVER_PORT;
@@ -558,6 +889,7 @@ int notification_init(apr_pool_t * pool, server_rec * server)
 		lwsl_err("libwebsocket init failed\n");
 		return -1;
 	}
+	return 0;
 }
 
 void notification_close()
@@ -566,6 +898,7 @@ void notification_close()
 
 	lwsl_notice("libwebsockets-test-server exited cleanly\n");
 }
+
 
 /**
  * \brief send notification if any
@@ -625,106 +958,6 @@ int notification_handle()
 #ifdef TEST_NOTIFICATION_SERVER
 int main(int argc, char **argv)
 {
-//	char cert_path[1024];
-//	char key_path[1024];
-//	int n = 0;
-//	int use_ssl = 0;
-//	struct libwebsocket_context *context;
-//	int opts = 0;
-//	char interface_name[128] = "";
-//	const char *iface = NULL;
-//	unsigned int oldus = 0;
-//	unsigned int olds = 0;
-//	struct lws_context_creation_info info;
-//
-//	int debug_level = 7;
-//
-//	memset(&info, 0, sizeof info);
-//	info.port = 8081;
-//
-//	/* tell the library what debug level to emit and to send it to syslog */
-//	lws_set_log_level(debug_level, lwsl_emit_syslog);
-//
-//	lwsl_notice("libwebsockets test server - "
-//			"(C) Copyright 2010-2013 Andy Green <andy@warmcat.com> - "
-//						    "licensed under LGPL2.1\n");
-//	max_poll_elements = getdtablesize();
-//	pollfds = malloc(max_poll_elements * sizeof (struct pollfd));
-//	fd_lookup = malloc(max_poll_elements * sizeof (int));
-//	if (pollfds == NULL || fd_lookup == NULL) {
-//		lwsl_err("Out of memory pollfds=%d\n", max_poll_elements);
-//		return -1;
-//	}
-//
-//	info.iface = iface;
-//	info.protocols = protocols;
-//
-//	//snprintf(cert_path, sizeof(cert_path), "%s/libwebsockets-test-server.pem", resource_path);
-//	//snprintf(key_path, sizeof(cert_path), "%s/libwebsockets-test-server.key.pem", resource_path);
-//
-//	//info.ssl_cert_filepath = cert_path;
-//	//info.ssl_private_key_filepath = key_path;
-//	//
-//	info.gid = -1;
-//	info.uid = -1;
-//	info.options = opts;
-//
-//	/* create server */
-//	context = libwebsocket_create_context(&info);
-//	if (context == NULL) {
-//		lwsl_err("libwebsocket init failed\n");
-//		return -1;
-//	}
-//
-//	n = 0;
-//	while (n >= 0 && !force_exit) {
-//		struct timeval tv;
-//
-//		gettimeofday(&tv, NULL);
-//
-//		/*
-//		 * This provokes the LWS_CALLBACK_SERVER_WRITEABLE for every
-//		 * live websocket connection using the DUMB_INCREMENT protocol,
-//		 * as soon as it can take more packets (usually immediately)
-//		 */
-//
-//		if (((unsigned int)tv.tv_sec - olds) > 0) {
-//			libwebsocket_callback_on_writable_all_protocol(&protocols[PROTOCOL_NOTIFICATION]);
-//			olds = tv.tv_sec;
-//		}
-//
-//
-//		/*
-//		 * this represents an existing server's single poll action
-//		 * which also includes libwebsocket sockets
-//		 */
-//
-//		n = poll(pollfds, count_pollfds, 50);
-//		if (n < 0)
-//			continue;
-//
-//
-//		if (n) {
-//			for (n = 0; n < count_pollfds; n++) {
-//				if (pollfds[n].revents) {
-//					/*
-//					* returns immediately if the fd does not
-//					* match anything under libwebsockets
-//					* control
-//					*/
-//					if (libwebsocket_service_fd(context, &pollfds[n]) < 0) {
-//						break;
-//					}
-//				}
-//			}
-//		}
-//	}
-//
-//	libwebsocket_context_destroy(context);
-//
-//	lwsl_notice("libwebsockets-test-server exited cleanly\n");
-//
-//	return 0;
 	if (notification_init(NULL, NULL) == -1) {
 		fprintf(stderr, "Error during initialization\n");
 		return 1;

@@ -28,9 +28,12 @@ CPPFLAGS=@CPPFLAGS@
 LIBS=@LIBS@
 
 SRCS=mod_netconf.c \
+     notification-server.c \
      test-client.c
 
-HDRS=message_type.h
+HDRS=message_type.h \
+     notification_module.h \
+     mod_netconf.h
 
 all: module client
 

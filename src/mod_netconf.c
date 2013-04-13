@@ -223,6 +223,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 				(port==NULL) ? "830" : port,
 				nc_session_get_id(session));
 
+		/** \todo allocate from apr_pool */
 		if ((locked_session = malloc (sizeof (struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
 			nc_session_free(session);
 			free (locked_session);
@@ -240,6 +241,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
+		locked_session->notifications = apr_array_make(pool, NOTIFICATION_QUEUE_SIZE, sizeof(notification_t));
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Add connection to the list");
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
@@ -270,6 +272,8 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 	}
 	locked_session = (struct session_with_mutex *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (locked_session != NULL) {
+		/** \todo free all notifications from queue */
+		apr_array_clear(locked_session->notifications);
 		pthread_mutex_destroy(&locked_session->lock);
 		ns = locked_session->session;
 		free (locked_session);
@@ -1446,17 +1450,17 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		return;
 	}
 
+	/* prepare internal lists */
+	netconf_sessions_list = apr_hash_make(pool);
+
 	#ifdef WITH_NOTIFICATIONS
-	if (notification_init(pool, server) == -1) {
+	if (notification_init(pool, server, netconf_sessions_list) == -1) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "libwebsockets initialization failed");
 		use_notifications = 0;
 	} else {
 		use_notifications = 1;
 	}
 	#endif
-
-	/* prepare internal lists */
-	netconf_sessions_list = apr_hash_make(pool);
 
 	/* setup libnetconf's callbacks */
 	nc_verbosity(NC_VERB_DEBUG);

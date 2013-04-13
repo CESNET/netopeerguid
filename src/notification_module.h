@@ -42,11 +42,12 @@
  */
 #ifndef __NOTIFICATION_MODULE_H
 #define __NOTIFICATION_MODULE_H
-#include "libwebsockets.h"
+#include <libwebsockets.h>
 
 #ifndef TEST_NOTIFICATION_SERVER
 #include <httpd.h>
 #include <http_log.h>
+#include <apr_hash.h>
 #else
 typedef struct p {} apr_pool_t;
 typedef struct s {} server_rec;
@@ -54,10 +55,24 @@ typedef struct s {} server_rec;
 
 #define NOTIFICATION_SERVER_PORT	8080
 
-int notification_init(apr_pool_t * pool, server_rec * server);
+/**
+ * \brief Notification module initialization
+ * \param pool - apr_pool_t for memory allocation
+ * \param server - server_rec for Apache logging
+ * \param conns - apr_hash_t representing the list of netconf connections
+ * \return 0 on success
+ */
+int notification_init(apr_pool_t * pool, server_rec * server, apr_hash_t *conns);
 
+/**
+ * \brief Handle method - passes execution into the libwebsocket library
+ * \return 0 on success
+ */
 int notification_handle();
 
+/**
+ * \brief Notification module finalization
+ */
 void notification_close();
 
 #endif
