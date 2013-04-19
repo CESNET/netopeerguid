@@ -205,6 +205,17 @@ void netconf_callback_error_process(const char* tag,
 	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
 }
 
+/**
+ * \defgroup netconf_operations NETCONF operations
+ * The list of NETCONF operations that mod_netconf supports.
+ * @{
+ */
+
+/**
+ * \brief Connect to NETCONF server
+ *
+ * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
+ */
 static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
 {
 	struct nc_session* session;
@@ -729,6 +740,10 @@ static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* se
 		return (EXIT_FAILURE);
 	}
 }
+
+/**
+ * @}
+ *//* netconf_operations */
 
 server_rec* clb_print_server;
 void clb_print(NC_VERB_LEVEL level, const char* msg)
