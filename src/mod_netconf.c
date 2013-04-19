@@ -81,7 +81,7 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #define BUFFER_SIZE 4096
 #define NOTIFICATION_QUEUE_SIZE 10
 #define ACTIVITY_CHECK_INTERVAL	10  /**< timeout in seconds, how often activity is checked */
-#define ACTIVITY_TIMEOUT	180  /**< timeout in seconds, after this time, session is automaticaly closed. */
+#define ACTIVITY_TIMEOUT	(60*60)  /**< timeout in seconds, after this time, session is automaticaly closed. */
 
 /* sleep in master process for non-blocking socket reading */
 #define SLEEP_TIME 200
