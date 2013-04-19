@@ -253,6 +253,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 			return NULL;
 		}
 		locked_session->notifications = apr_array_make(pool, NOTIFICATION_QUEUE_SIZE, sizeof(notification_t));
+		locked_session->ntfc_subscribed = 0;
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Add connection to the list");
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
