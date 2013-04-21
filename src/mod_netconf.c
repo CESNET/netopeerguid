@@ -1490,6 +1490,8 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	/* disable publickey authentication */
 	nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, -1);
 
+	ncdflt_set_basic_mode(NCWD_MODE_ALL);
+
 	/* create mutex protecting session list */
 	pthread_rwlockattr_init(&lock_attrs);
 	/* rwlock is shared only with threads in this process */
