@@ -218,13 +218,16 @@ void netconf_callback_error_process(const char* tag,
  */
 static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* conns, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
 {
-	struct nc_session* session;
+	struct nc_session* session = NULL;
 	struct session_with_mutex * locked_session;
 	char *session_key;
 
 	/* connect to the requested NETCONF server */
 	password = (char*)pass;
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "prepare to connect %s@%s:%s", user, host, port);
+	nc_verbosity(NC_VERB_DEBUG);
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
+	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done (%x)", (int) session);
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
@@ -936,14 +939,14 @@ msg_complete:
 				user = json_object_get_string(json_object_object_get(request, "user"));
 				pass = json_object_get_string(json_object_object_get(request, "pass"));
 				capabilities = json_object_object_get(request, "capabilities");
-            if ((capabilities != NULL) && ((len = json_object_array_length(capabilities)) > 0)) {
-                  cpblts = nc_cpblts_new (NULL);
-                  for (i=0; i<len; i++) {
-                     nc_cpblts_add (cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
-                  }
-            } else {
-               ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
-            }
+				if ((capabilities != NULL) && ((len = json_object_array_length(capabilities)) > 0)) {
+					cpblts = nc_cpblts_new (NULL);
+					for (i=0; i<len; i++) {
+						nc_cpblts_add (cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
+					}
+				} else {
+					ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
+				}
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
 				if ((host == NULL) || (user == NULL)) {
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
