@@ -28,10 +28,24 @@ REQS="$REQS httpd php json-c"
 BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
 
 # Checks for libraries.
-AC_SEARCH_LIBS([ncds_apply_rpc],[netconf], ,AC_MSG_ERROR([libnetconf not found!]))
-REQS="$REQS libnetconf >= 0.4.0 libwebsockets"
-BUILDREQS="$BUILDREQS libnetconf-devel libwebsockets-devel"
-CPPFLAGS=""
+# libnetconf
+AC_ARG_WITH([libnetconf],
+	AC_HELP_STRING([--with-libnetconf=PATH],[Set the path to libnetconf (usually local GIT repository)]),
+	[# local copy of libnetconf GIT repo with headers and binaries
+	LIBNETCONF_CFLAGS="-I`cd $withval;pwd`"
+	LIBNETCONF_LIBS="-L`cd $withval;pwd` -lnetconf"
+    LIBNETCONF_WITH=" --with-libnetconf=$withval"],
+	[# get info from pkg-config about installed package
+	PKG_CHECK_MODULES(LIBNETCONF, libnetconf)
+    BUILDREQS="$BUILDREQS ,libnetconf-devel"]
+)
+CFLAGS="$CFLAGS $LIBNETCONF_CFLAGS"
+LIBS="$LIBS $LIBNETCONF_LIBS"
+AC_SUBST([LIBNETCONF_LIBS])
+AC_SUBST([LIBNETCONF_CFLAGS])
+AC_SUBST([LIBNETCONF_WITH])
+REQS="$REQS , libnetconf"
+AC_CHECK_LIB([netconf], [ncds_new],[],AC_MSG_ERROR([libnetconf not found.]))
 
 # Checks for header files.
 AC_CHECK_HEADER([libnetconf.h], ,AC_MSG_ERROR([libnetconf.h not found!]))
@@ -47,17 +61,21 @@ fi
 
 
 AC_ARG_WITH([notifications],
-	[AC_HELP_STRING([--with-notifications], [Enable notifications])],
-	[
-		CPPFLAGS=" -DWITH_NOTIFICATIONS "
+	[AC_HELP_STRING([--without-notifications], [Disable notifications])],
+	AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
+	[ CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
-	],
-	[CPPFLAGS="$CPPFLAGS"]
+	]),
+	[
+		CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
+		LIBS="-lwebsockets $LIBS"
+	]
 )
 
+CFLAGS="$CFLAGS -I/usr/include/json"
 AC_SUBST(REQS)
 AC_SUBST(BUILDREQS)
-AC_SUBST(CPPFLAGS)
+AC_SUBST(CFLAGS)
 AC_SUBST(RCSID)
 AC_SUBST(ARCSID)
 AC_SUBST(LIBS)

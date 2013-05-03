@@ -67,6 +67,7 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #include <json/json.h>
 
 #include <libnetconf.h>
+#include <libnetconf_ssh.h>
 
 #ifdef WITH_NOTIFICATIONS
 #include "notification_module.h"
@@ -227,7 +228,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "prepare to connect %s@%s:%s", user, host, port);
 	nc_verbosity(NC_VERB_DEBUG);
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
-	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done (%x)", (int) session);
+	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done (%p)", session);
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {

@@ -23,8 +23,7 @@ RCSID = @RCSID@
 
 APXS=/usr/sbin/apxs
 
-CFLAGS=-I/usr/include/json
-CPPFLAGS=@CPPFLAGS@
+CFLAGS=@CFLAGS@
 LIBS=@LIBS@
 
 SRCS=mod_netconf.c \
@@ -38,7 +37,7 @@ HDRS=message_type.h \
 all: module client
 
 module: mod_netconf.c
-	$(APXS) $(LIBS) $(ARCSID) $(CPPFLAGS) -c mod_netconf.c notification-server.c
+	$(APXS) $(LIBS) $(ARCSID) $(CFLAGS) -c mod_netconf.c notification-server.c
 
 client: test-client.c
 	gcc $(RCSID) -std=gnu99 -Wall -g -ljson -I/usr/include/json test-client.c -o test-client
