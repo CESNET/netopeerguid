@@ -69,6 +69,8 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>
 
+struct nc_session *nc_session_connect_channel(struct nc_session *session, const struct nc_cpblts* cpblts);
+
 #ifdef WITH_NOTIFICATIONS
 #include "notification_module.h"
 #endif
@@ -206,6 +208,38 @@ void netconf_callback_error_process(const char* tag,
 	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
 }
 
+void prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
+{
+	json_object *json_obj;
+	const char *cpbltstr;
+	struct nc_cpblts* cpblts = NULL;
+	if (s->hello_message != NULL) {
+		json_object_object_del(s->hello_message, NULL);
+	}
+	s->hello_message = json_object_new_object();
+	if (session != NULL) {
+		json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
+		json_object_object_add(s->hello_message, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
+		json_object_object_add(s->hello_message, "host", json_object_new_string(nc_session_get_host(session)));
+		json_object_object_add(s->hello_message, "port", json_object_new_string(nc_session_get_port(session)));
+		json_object_object_add(s->hello_message, "user", json_object_new_string(nc_session_get_user(session)));
+		cpblts = nc_session_get_cpblts (session);
+		if (cpblts != NULL) {
+			json_obj = json_object_new_array();
+			nc_cpblts_iter_start (cpblts);
+			while ((cpbltstr = nc_cpblts_iter_next (cpblts)) != NULL) {
+				json_object_array_add(json_obj, json_object_new_string(cpbltstr));
+			}
+			json_object_object_add(s->hello_message, "capabilities", json_obj);
+		}
+	} else {
+		json_object_object_add(s->hello_message, "type", json_object_new_int(REPLY_ERROR));
+		json_object_object_add(s->hello_message, "error-message", json_object_new_string("Invalid session identifier."));
+	}
+
+}
+
+
 /**
  * \defgroup netconf_operations NETCONF operations
  * The list of NETCONF operations that mod_netconf supports.
@@ -247,6 +281,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 		}
 		locked_session->session = session;
 		locked_session->last_activity = apr_time_now();
+		locked_session->hello_message = NULL;
 		pthread_mutex_init (&locked_session->lock, NULL);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
@@ -261,6 +296,10 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Add connection to the list");
 		apr_hash_set(conns, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
+
+		/* store information about session from hello message for future usage */
+		prepare_status_message(locked_session, session);
+
 		/* end of critical section */
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
 			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
@@ -292,6 +331,9 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 		apr_array_clear(locked_session->notifications);
 		pthread_mutex_destroy(&locked_session->lock);
 		ns = locked_session->session;
+		if (locked_session->hello_message != NULL) {
+			json_object_object_del(locked_session->hello_message, NULL);
+		}
 		free (locked_session);
 	}
 	if (ns != NULL) {
@@ -776,17 +818,16 @@ void * thread_routine (void * arg)
 	ssize_t buffer_len;
 	struct pollfd fds;
 	int status, buffer_size, ret;
-	json_object *request, *reply, *json_obj, *capabilities;
+	json_object *request, *reply, *capabilities;
 	int operation;
 	int i, chunk_len, len = 0;
 	char* session_key, *data;
 	const char *host, *port, *user, *pass;
-	const char *msgtext, *cpbltstr;
+	const char *msgtext;
 	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
 	const char *identifier, *version, *format;
-	struct nc_session *session = NULL;
-	struct session_with_mutex * locked_session;
 	struct nc_cpblts* cpblts = NULL;
+	struct session_with_mutex * locked_session;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
@@ -958,6 +999,7 @@ msg_complete:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
 				}
 
+				/** \todo check if this is neccessary... probably leads to memory leaks */
 				reply =  json_object_new_object();
 				if (session_key == NULL) {
 					/* negative reply */
@@ -1244,35 +1286,36 @@ msg_complete:
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 				}
 				break;
-			case MSG_INFO:
+			case MSG_RELOADHELLO:
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
 
 				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-				if (locked_session != NULL) {
-					session = locked_session->session;
-				} else {
-					session = NULL;
-				}
-				if (session != NULL) {
-					json_object_object_add(reply, "sid", json_object_new_string(nc_session_get_id(session)));
-					json_object_object_add(reply, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
-					json_object_object_add(reply, "host", json_object_new_string(nc_session_get_host(session)));
-					json_object_object_add(reply, "port", json_object_new_string(nc_session_get_port(session)));
-					json_object_object_add(reply, "user", json_object_new_string(nc_session_get_user(session)));
-					cpblts = nc_session_get_cpblts (session);
-					if (cpblts != NULL) {
-						json_obj = json_object_new_array();
-						nc_cpblts_iter_start (cpblts);
-						while ((cpbltstr = nc_cpblts_iter_next (cpblts)) != NULL) {
-							json_object_array_add(json_obj, json_object_new_string(cpbltstr));
-						}
-						json_object_object_add(reply, "capabilities", json_obj);
-					}
+				if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
+					struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
+					prepare_status_message(locked_session, temp_session);
+					nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
 				} else {
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 					json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+					break;
 				}
+				/* do NOT insert "break" here, we want to give new info back */;
+			case MSG_INFO:
+				if (operation != MSG_INFO) {
+					json_object_object_del(reply, NULL);
+					reply = locked_session->hello_message;
+				} else {
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
 
+					locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+					if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
+						json_object_object_del(reply, NULL);
+						reply = locked_session->hello_message;
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+					}
+				}
 				break;
 			case MSG_GENERIC:
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: generic request for session %s", session_key);

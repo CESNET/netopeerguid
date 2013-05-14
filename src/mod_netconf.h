@@ -51,6 +51,7 @@
 #include <http_log.h>
 #include <http_config.h>
 #include <apr_hash.h>
+#include <json/json.h>
 
 struct pass_to_thread {
 	int client; /**< opened socket */
@@ -67,6 +68,7 @@ typedef struct notification {
 struct session_with_mutex {
 	struct nc_session * session; /**< netconf session */
 	apr_array_header_t *notifications;
+	json_object *hello_message;
 	char ntfc_subscribed; /**< 0 when notifications are not subscribed */
 	apr_time_t last_activity;
 	pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
