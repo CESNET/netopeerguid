@@ -69,8 +69,6 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>
 
-struct nc_session *nc_session_connect_channel(struct nc_session *session, const struct nc_cpblts* cpblts);
-
 #ifdef WITH_NOTIFICATIONS
 #include "notification_module.h"
 #endif
@@ -208,13 +206,14 @@ void netconf_callback_error_process(const char* tag,
 	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
 }
 
-void prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
+void prepare_status_message(server_rec* server, struct session_with_mutex *s, struct nc_session *session)
 {
 	json_object *json_obj;
 	const char *cpbltstr;
 	struct nc_cpblts* cpblts = NULL;
 	if (s->hello_message != NULL) {
-		json_object_object_del(s->hello_message, NULL);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "clean previous hello message");
+		//json_object_object_del(s->hello_message, NULL);
 	}
 	s->hello_message = json_object_new_object();
 	if (session != NULL) {
@@ -232,10 +231,13 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 			}
 			json_object_object_add(s->hello_message, "capabilities", json_obj);
 		}
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "%s", json_object_to_json_string(s->hello_message));
 	} else {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Session was not given.");
 		json_object_object_add(s->hello_message, "type", json_object_new_int(REPLY_ERROR));
 		json_object_object_add(s->hello_message, "error-message", json_object_new_string("Invalid session identifier."));
 	}
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Status info from hello message prepared");
 
 }
 
@@ -298,7 +300,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
 
 		/* store information about session from hello message for future usage */
-		prepare_status_message(locked_session, session);
+		prepare_status_message(server, locked_session, session);
 
 		/* end of critical section */
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
@@ -332,7 +334,7 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 		pthread_mutex_destroy(&locked_session->lock);
 		ns = locked_session->session;
 		if (locked_session->hello_message != NULL) {
-			json_object_object_del(locked_session->hello_message, NULL);
+			//json_object_object_del(locked_session->hello_message, NULL);
 		}
 		free (locked_session);
 	}
@@ -1292,7 +1294,7 @@ msg_complete:
 				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 				if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
 					struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
-					prepare_status_message(locked_session, temp_session);
+					prepare_status_message(server, locked_session, temp_session);
 					nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
 				} else {
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -1302,15 +1304,24 @@ msg_complete:
 				/* do NOT insert "break" here, we want to give new info back */;
 			case MSG_INFO:
 				if (operation != MSG_INFO) {
-					json_object_object_del(reply, NULL);
-					reply = locked_session->hello_message;
+					//json_object_object_del(reply, NULL);
+					if (locked_session->hello_message != NULL) {
+						reply = locked_session->hello_message;
+					} else {
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+					}
 				} else {
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
 
 					locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-					if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
-						json_object_object_del(reply, NULL);
-						reply = locked_session->hello_message;
+					if (locked_session != NULL) {
+						if (locked_session->hello_message != NULL) {
+							reply = locked_session->hello_message;
+						} else {
+							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+							json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
+						}
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
