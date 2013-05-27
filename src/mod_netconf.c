@@ -209,15 +209,26 @@ void netconf_callback_error_process(const char* tag,
 void prepare_status_message(server_rec* server, struct session_with_mutex *s, struct nc_session *session)
 {
 	json_object *json_obj;
+	json_object *old_sid = NULL;
 	const char *cpbltstr;
 	struct nc_cpblts* cpblts = NULL;
+
 	if (s->hello_message != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "clean previous hello message");
 		//json_object_object_del(s->hello_message, NULL);
+
+		//old_sid = json_object_object_get(s->hello_message, "sid");
 	}
 	s->hello_message = json_object_new_object();
 	if (session != NULL) {
+		/** \todo reload hello - save old sid */
+		//if (old_sid != NULL) {
+		//	/* use previous sid */
+		//	json_object_object_add(s->hello_message, "sid", old_sid);
+		//} else {
+			/* we don't have old sid */
 		json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
+		//}
 		json_object_object_add(s->hello_message, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
 		json_object_object_add(s->hello_message, "host", json_object_new_string(nc_session_get_host(session)));
 		json_object_object_add(s->hello_message, "port", json_object_new_string(nc_session_get_port(session)));
@@ -264,7 +275,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "prepare to connect %s@%s:%s", user, host, port);
 	nc_verbosity(NC_VERB_DEBUG);
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
-	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done (%p)", session);
+	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done");
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
@@ -1294,8 +1305,12 @@ msg_complete:
 				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 				if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
 					struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
-					prepare_status_message(server, locked_session, temp_session);
-					nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
+					if (temp_session != NULL) {
+						prepare_status_message(server, locked_session, temp_session);
+						nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
+					} else {
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
+					}
 				} else {
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 					json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));

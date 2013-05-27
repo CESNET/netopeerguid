@@ -502,6 +502,7 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	if (http_server != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: ready to push to notifications queue");
 	}
+	/** \todo push to all clients */
 	ntf = (notification_t *) apr_array_push(target_session->notifications);
 	if (ntf == NULL) {
 		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Failed to allocate element ");
