@@ -512,7 +512,7 @@ static void notification_fileprint (time_t eventtime, const char* content)
 		}
 		return;
 	}
-	ntf->eventtime = time(NULL);
+	ntf->eventtime = eventtime;
 	ntf->content = strdup(content);
 
 	if (http_server != NULL) {
@@ -708,11 +708,15 @@ static int callback_notification(struct libwebsocket_context *context,
 
 			while ((notif = (notification_t *) apr_array_pop(ls->notifications)) != NULL) {
 				char t[128];
-				t[0] = 0;
+				memset(&t, 0, 128);
 				strftime(t, sizeof(t), "%c", localtime(&notif->eventtime));
 				n = 0;
-				n = sprintf((char *)p, "%s\n", notif->content);
-				m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+				json_object *notif_json = json_object_new_object();
+				json_object_object_add(notif_json, "eventtime", json_object_new_string(t));
+				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
+
+				char *msgtext = json_object_to_json_string(notif_json);
+				m = libwebsocket_write(wsi, (unsigned char *) msgtext, strlen(msgtext), LWS_WRITE_TEXT);
 			}
 			if (http_server != NULL) {
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications done");

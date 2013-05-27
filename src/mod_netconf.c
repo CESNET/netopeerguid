@@ -209,7 +209,7 @@ void netconf_callback_error_process(const char* tag,
 void prepare_status_message(server_rec* server, struct session_with_mutex *s, struct nc_session *session)
 {
 	json_object *json_obj;
-	json_object *old_sid = NULL;
+	//json_object *old_sid = NULL;
 	const char *cpbltstr;
 	struct nc_cpblts* cpblts = NULL;
 
