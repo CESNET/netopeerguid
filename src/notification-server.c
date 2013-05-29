@@ -98,7 +98,7 @@ char *resource_path = LOCAL_RESOURCE_PATH;
 struct serveable {
 	const char *urlpath;
 	const char *mimetype;
-}; 
+};
 
 static const struct serveable whitelist[] = {
 	{ "/favicon.ico", "image/x-icon" },
@@ -470,14 +470,10 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	notification_t *ntf = NULL;
 	char *session_hash = NULL;
 
-	t[0] = 0;
-	strftime(t, sizeof(t), "%c", localtime(&eventtime));
-
 	if (http_server != NULL) {
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: eventTime: %s\n%s\n", t, content);
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "Accepted notif: %lu %s\n", (unsigned long int) eventtime, content);
 	}
-	
-	/* \todo replace last_session_key with client identification */
+
 	session_hash = pthread_getspecific(thread_key);
 	if (http_server != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: fileprint getspecific (%s)", session_hash);
@@ -487,6 +483,10 @@ static void notification_fileprint (time_t eventtime, const char* content)
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "no session found last_session_key (%s)", session_hash);
 		return;
 	}
+
+	t[0] = 0;
+	strftime(t, sizeof(t), "%c", localtime(&eventtime));
+
 	if (pthread_mutex_lock(&target_session->lock) != 0) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
 		return;
@@ -502,7 +502,6 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	if (http_server != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: ready to push to notifications queue");
 	}
-	/** \todo push to all clients */
 	ntf = (notification_t *) apr_array_push(target_session->notifications);
 	if (ntf == NULL) {
 		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Failed to allocate element ");
@@ -537,17 +536,12 @@ void* notification_thread(void* arg)
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notifications: in thread for libnetconf notifications");
 	}
 	#endif
-	if (http_server != NULL) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: pthread_key_create");
+
+	/* store hash identification of netconf session for notifications printing callback */
+	if (pthread_setspecific(thread_key, config->session_hash) != 0) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: cannot set thread-specific hash value.");
 	}
-	if (pthread_key_create(&thread_key, NULL) != 0) {
-		#ifndef TEST_NOTIFICATION_SERVER
-		if (http_server != NULL) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: pthread_key_create failed");
-		}
-		#endif
-	}
-	pthread_setspecific(thread_key, config->session_hash);
+
 	if (http_server != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: dispatching");
 	}
@@ -665,9 +659,10 @@ static int callback_notification(struct libwebsocket_context *context,
 	struct per_session_data__notif_client *pss = (struct per_session_data__notif_client *)user;
 
 	switch (reason) {
-
 	case LWS_CALLBACK_ESTABLISHED:
-		lwsl_info("callback_notification: LWS_CALLBACK_ESTABLISHED\n");
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification client connected.");
+		}
 		pss->number = 0;
 		break;
 
@@ -716,7 +711,11 @@ static int callback_notification(struct libwebsocket_context *context,
 				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
 
 				char *msgtext = json_object_to_json_string(notif_json);
-				m = libwebsocket_write(wsi, (unsigned char *) msgtext, strlen(msgtext), LWS_WRITE_TEXT);
+
+				n = sprintf((char *)p, "%s", msgtext);
+				m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+
+				//json_object_put(notif_json);
 			}
 			if (http_server != NULL) {
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications done");
@@ -736,11 +735,16 @@ static int callback_notification(struct libwebsocket_context *context,
 
 
 		if (m < n) {
-			lwsl_err("ERROR %d writing to di socket\n", n);
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "ERROR %d writing to di socket\n", n);
+			}
+
 			return -1;
 		}
 		if (close_testing && pss->number == 50) {
-			lwsl_info("close tesing limit, closing\n");
+			if (http_server != NULL) {
+				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "close tesing limit, closing\n");
+			}
 			return -1;
 		}
 		break;
@@ -763,7 +767,7 @@ static int callback_notification(struct libwebsocket_context *context,
 			if (http_server != NULL) {
 				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: get key (%s) from (%s) (%i,%i)", pss->session_key, (char *) in, (int) start, (int) stop);
 			}
-			
+
 			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
 			if (ls == NULL) {
 				if (http_server != NULL) {
@@ -861,14 +865,14 @@ int notification_init(apr_pool_t * pool, server_rec * server, apr_hash_t *conns)
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "Initialization of libwebsocket");
 	}
 	#endif
-	lwsl_notice("libwebsockets test server - "
-			"(C) Copyright 2010-2013 Andy Green <andy@warmcat.com> - "
-						    "licensed under LGPL2.1\n");
+	//lwsl_notice("libwebsockets test server - "
+	//		"(C) Copyright 2010-2013 Andy Green <andy@warmcat.com> - "
+	//					    "licensed under LGPL2.1\n");
 	max_poll_elements = getdtablesize();
 	pollfds = malloc(max_poll_elements * sizeof (struct pollfd));
 	fd_lookup = malloc(max_poll_elements * sizeof (int));
 	if (pollfds == NULL || fd_lookup == NULL) {
-		lwsl_err("Out of memory pollfds=%d\n", max_poll_elements);
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Out of memory pollfds=%d\n", max_poll_elements);
 		return -1;
 	}
 
@@ -888,8 +892,17 @@ int notification_init(apr_pool_t * pool, server_rec * server, apr_hash_t *conns)
 	/* create server */
 	context = libwebsocket_create_context(&info);
 	if (context == NULL) {
-		lwsl_err("libwebsocket init failed\n");
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "libwebsocket init failed.");
 		return -1;
+	}
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notifications: init of pthread_key_create.");
+	if (pthread_key_create(&thread_key, NULL) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		if (http_server != NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: pthread_key_create failed");
+		}
+		#endif
 	}
 	return 0;
 }
@@ -898,7 +911,7 @@ void notification_close()
 {
 	libwebsocket_context_destroy(context);
 
-	lwsl_notice("libwebsockets-test-server exited cleanly\n");
+	ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "libwebsockets-test-server exited cleanly\n");
 }
 
 
