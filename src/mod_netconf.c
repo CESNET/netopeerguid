@@ -208,14 +208,20 @@ void netconf_callback_error_process(const char* tag,
 
 void prepare_status_message(server_rec* server, struct session_with_mutex *s, struct nc_session *session)
 {
-	json_object *json_obj;
+	json_object *json_obj = NULL;
 	//json_object *old_sid = NULL;
 	const char *cpbltstr;
 	struct nc_cpblts* cpblts = NULL;
 
+	if (s == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "No session given.");
+		return;
+	}
+
 	if (s->hello_message != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "clean previous hello message");
-		//json_object_object_del(s->hello_message, NULL);
+		//json_object_put(s->hello_message);
+		s->hello_message = NULL;
 
 		//old_sid = json_object_object_get(s->hello_message, "sid");
 	}
@@ -345,7 +351,8 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 		pthread_mutex_destroy(&locked_session->lock);
 		ns = locked_session->session;
 		if (locked_session->hello_message != NULL) {
-			//json_object_object_del(locked_session->hello_message, NULL);
+			json_object_put(locked_session->hello_message);
+			locked_session->hello_message = NULL;
 		}
 		free (locked_session);
 	}
@@ -1012,8 +1019,6 @@ msg_complete:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
 				}
 
-				/** \todo check if this is neccessary... probably leads to memory leaks */
-				reply =  json_object_new_object();
 				if (session_key == NULL) {
 					/* negative reply */
 					if (err_reply == NULL) {
@@ -1304,9 +1309,11 @@ msg_complete:
 
 				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 				if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "creating temporal NC session.");
 					struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
 					if (temp_session != NULL) {
 						prepare_status_message(server, locked_session, temp_session);
+						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
 						nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
 					} else {
 						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
@@ -1319,8 +1326,8 @@ msg_complete:
 				/* do NOT insert "break" here, we want to give new info back */;
 			case MSG_INFO:
 				if (operation != MSG_INFO) {
-					//json_object_object_del(reply, NULL);
 					if (locked_session->hello_message != NULL) {
+						json_object_put(reply);
 						reply = locked_session->hello_message;
 					} else {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -1332,6 +1339,7 @@ msg_complete:
 					locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 					if (locked_session != NULL) {
 						if (locked_session->hello_message != NULL) {
+							json_object_put(reply);
 							reply = locked_session->hello_message;
 						} else {
 							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -1374,7 +1382,6 @@ msg_complete:
 				break;
 			default:
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);
-				reply =  json_object_new_object();
 				json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 				json_object_object_add(reply, "error-message", json_object_new_string("Operation not supported."));
 				break;
@@ -1390,6 +1397,7 @@ msg_complete:
 				}
 				send(client, chunked_msg, strlen(chunked_msg) + 1, 0);
 				json_object_put(reply);
+				reply = NULL;
 				free (chunked_msg);
 				free (buffer);
 			} else {
@@ -1575,7 +1583,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		close (lsock);
 		return;
 	}
-	
+
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
 	while (isterminated == 0) {
 		gettimeofday(&tv, NULL);

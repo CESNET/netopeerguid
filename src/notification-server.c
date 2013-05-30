@@ -715,7 +715,7 @@ static int callback_notification(struct libwebsocket_context *context,
 				n = sprintf((char *)p, "%s", msgtext);
 				m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
 
-				//json_object_put(notif_json);
+				json_object_put(notif_json);
 			}
 			if (http_server != NULL) {
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications done");
