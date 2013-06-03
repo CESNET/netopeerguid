@@ -710,7 +710,7 @@ static int callback_notification(struct libwebsocket_context *context,
 				json_object_object_add(notif_json, "eventtime", json_object_new_string(t));
 				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
 
-				char *msgtext = json_object_to_json_string(notif_json);
+				const char *msgtext = json_object_to_json_string(notif_json);
 
 				n = sprintf((char *)p, "%s", msgtext);
 				m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);

@@ -385,7 +385,7 @@ static int netconf_op(server_rec* server, apr_hash_t* conns, const char* session
 {
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
-	nc_reply* reply;
+	nc_reply* reply = NULL;
 	int retval = EXIT_SUCCESS;
 	NC_MSG_TYPE msgt;
 	NC_REPLY_TYPE replyt;
@@ -738,8 +738,8 @@ static int netconf_unlock(server_rec* server, apr_hash_t* conns, const char* ses
 static int netconf_generic(server_rec* server, apr_hash_t* conns, const char* session_key, const char* content, char** data)
 {
 	struct nc_session *session = NULL;
-	nc_reply* reply;
-	nc_rpc* rpc;
+	nc_reply* reply = NULL;
+	nc_rpc* rpc = NULL;
 	int retval = EXIT_SUCCESS;
 	NC_MSG_TYPE msgt;
 	NC_REPLY_TYPE replyt;
@@ -838,7 +838,9 @@ void * thread_routine (void * arg)
 	ssize_t buffer_len;
 	struct pollfd fds;
 	int status, buffer_size, ret;
-	json_object *request, *reply, *capabilities;
+	json_object *request = NULL;
+	json_object *reply = NULL;
+	json_object *capabilities = NULL;
 	int operation;
 	int i, chunk_len, len = 0;
 	char* session_key, *data;
@@ -857,7 +859,8 @@ void * thread_routine (void * arg)
 	server_rec * server = ((struct pass_to_thread*)arg)->server;
 	int client = ((struct pass_to_thread*)arg)->client;
 
-	char * buffer, chunk_len_str[12], *chunked_msg;
+	char *buffer = NULL;
+	char chunk_len_str[12], *chunked_msg;
 	char c;
 
 	while (!isterminated) {
@@ -900,13 +903,17 @@ void * thread_routine (void * arg)
 		while (1) {
 			/* read chunk length */
 			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '\n') {
-				free (buffer);
-				buffer = NULL;
+				if (buffer != NULL) {
+					free (buffer);
+					buffer = NULL;
+				}
 				break;
 			}
 			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '#') {
-				free (buffer);
-				buffer = NULL;
+				if (buffer != NULL) {
+					free (buffer);
+					buffer = NULL;
+				}
 				break;
 			}
 			i=0;
@@ -915,29 +922,42 @@ void * thread_routine (void * arg)
 				if (i==0 && c == '#') {
 					if (recv (client, &c, 1, 0) != 1 || c != '\n') {
 						/* end but invalid */
-						free (buffer);
-						buffer = NULL;
+						if (buffer != NULL) {
+							free (buffer);
+							buffer = NULL;
+						}
 					}
 					/* end of message, double-loop break */
 					goto msg_complete;
 				}
 				chunk_len_str[i++] = c;
+				if (i==11) {
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Message is too long, buffer for length is not big enought!!!!");
+					break;
+				}
 			}
 			if (c != '\n') {
-				free (buffer);
-				buffer = NULL;
+				if (buffer != NULL) {
+					free (buffer);
+					buffer = NULL;
+				}
 				break;
 			}
+			chunk_len_str[i] = 0;
 			if ((chunk_len = atoi (chunk_len_str)) == 0) {
-				free (buffer);
-				buffer = NULL;
+				if (buffer != NULL) {
+					free (buffer);
+					buffer = NULL;
+				}
 				break;
 			}
 			buffer_size += chunk_len+1;
 			buffer = realloc (buffer, sizeof(char)*buffer_size);
 			if ((ret = recv (client, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
-				free (buffer);
-				buffer = NULL;
+				if (buffer != NULL) {
+					free (buffer);
+					buffer = NULL;
+				}
 				break;
 			}
 			buffer_len += ret;
@@ -945,7 +965,12 @@ void * thread_routine (void * arg)
 msg_complete:
 
 		if (buffer != NULL) {
-			request = json_tokener_parse(buffer);
+			enum json_tokener_error jerr;
+			request = json_tokener_parse_verbose(buffer, &jerr);
+			if (jerr != json_tokener_success) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "JSON parsing error");
+				continue;
+			}
 			operation = json_object_get_int(json_object_object_get(request, "type"));
 
 			session_key = (char*) json_object_get_string(json_object_object_get(request, "session"));
@@ -1392,14 +1417,20 @@ msg_complete:
 			if (reply != NULL) {
 				msgtext = json_object_to_json_string(reply);
 				if (asprintf (&chunked_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
-					free (buffer);
+					if (buffer != NULL) {
+						free(buffer);
+						buffer = NULL;
+					}
 					break;
 				}
 				send(client, chunked_msg, strlen(chunked_msg) + 1, 0);
 				json_object_put(reply);
-				reply = NULL;
-				free (chunked_msg);
-				free (buffer);
+				free(chunked_msg);
+				chunked_msg = NULL;
+				if (buffer != NULL) {
+					free(buffer);
+					buffer = NULL;
+				}
 			} else {
 				break;
 			}
