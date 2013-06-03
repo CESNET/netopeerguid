@@ -831,37 +831,117 @@ void clb_print(NC_VERB_LEVEL level, const char* msg)
 	}
 }
 
+/**
+ * Receive message from client and return pointer to it.
+ * Caller should free message memory.
+ * \param[in] client	socket descriptor of client
+ * \param[in] server	httpd server for logging
+ * \return pointer to message
+ */
+char *get_framed_message(server_rec *server, int client)
+{
+	/* read json in chunked framing */
+	unsigned int buffer_size = 0;
+	ssize_t buffer_len = 0;
+	char *buffer = NULL;
+	char c;
+	ssize_t ret;
+	int i, chunk_len;
+	char chunk_len_str[12];
+
+	while (1) {
+		/* read chunk length */
+		if ((ret = recv (client, &c, 1, 0)) != 1 || c != '\n') {
+			if (buffer != NULL) {
+				free (buffer);
+				buffer = NULL;
+			}
+			break;
+		}
+		if ((ret = recv (client, &c, 1, 0)) != 1 || c != '#') {
+			if (buffer != NULL) {
+				free (buffer);
+				buffer = NULL;
+			}
+			break;
+		}
+		i=0;
+		memset (chunk_len_str, 0, 12);
+		while ((ret = recv (client, &c, 1, 0) == 1 && (isdigit(c) || c == '#'))) {
+			if (i==0 && c == '#') {
+				if (recv (client, &c, 1, 0) != 1 || c != '\n') {
+					/* end but invalid */
+					if (buffer != NULL) {
+						free (buffer);
+						buffer = NULL;
+					}
+				}
+				/* end of message, double-loop break */
+				goto msg_complete;
+			}
+			chunk_len_str[i++] = c;
+			if (i==11) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Message is too long, buffer for length is not big enought!!!!");
+				break;
+			}
+		}
+		if (c != '\n') {
+			if (buffer != NULL) {
+				free (buffer);
+				buffer = NULL;
+			}
+			break;
+		}
+		chunk_len_str[i] = 0;
+		if ((chunk_len = atoi (chunk_len_str)) == 0) {
+			if (buffer != NULL) {
+				free (buffer);
+				buffer = NULL;
+			}
+			break;
+		}
+		buffer_size += chunk_len+1;
+		buffer = realloc (buffer, sizeof(char)*buffer_size);
+		if ((ret = recv (client, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
+			if (buffer != NULL) {
+				free (buffer);
+				buffer = NULL;
+			}
+			break;
+		}
+		buffer_len += ret;
+	}
+msg_complete:
+	return buffer;
+}
+
 void * thread_routine (void * arg)
 {
 	void * retval = NULL;
-
-	ssize_t buffer_len;
 	struct pollfd fds;
-	int status, buffer_size, ret;
 	json_object *request = NULL;
 	json_object *reply = NULL;
 	json_object *capabilities = NULL;
 	int operation;
-	int i, chunk_len, len = 0;
-	char* session_key, *data;
+	int i, len, status= 0;
+	char *session_key_hash = NULL;
+	char *data;
 	const char *host, *port, *user, *pass;
 	const char *msgtext;
-	const char *target, *source, *filter, *config, *defop, *erropt, *sid;
+	const char *target, *source, *filter, *config, *defop, *erropt, *sid, *session_key;
 	const char *identifier, *version, *format;
 	struct nc_cpblts* cpblts = NULL;
 	struct session_with_mutex * locked_session;
 	NC_DATASTORE ds_type_s, ds_type_t;
 	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
-
+	char *chunked_out_msg = NULL;
 	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
 	apr_hash_t *netconf_sessions_list = ((struct pass_to_thread*)arg)->netconf_sessions_list;
 	server_rec * server = ((struct pass_to_thread*)arg)->server;
 	int client = ((struct pass_to_thread*)arg)->client;
 
 	char *buffer = NULL;
-	char chunk_len_str[12], *chunked_msg;
-	char c;
 
 	while (!isterminated) {
 		fds.fd = client;
@@ -896,73 +976,8 @@ void * thread_routine (void * arg)
 			break;
 		}
 
-		/* read json in chunked framing */
-		buffer_size = 0;
-		buffer_len = 0;
-		buffer = NULL;
-		while (1) {
-			/* read chunk length */
-			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '\n') {
-				if (buffer != NULL) {
-					free (buffer);
-					buffer = NULL;
-				}
-				break;
-			}
-			if ((ret = recv (client, &c, 1, 0)) != 1 || c != '#') {
-				if (buffer != NULL) {
-					free (buffer);
-					buffer = NULL;
-				}
-				break;
-			}
-			i=0;
-			memset (chunk_len_str, 0, 12);
-			while ((ret = recv (client, &c, 1, 0) == 1 && (isdigit(c) || c == '#'))) {
-				if (i==0 && c == '#') {
-					if (recv (client, &c, 1, 0) != 1 || c != '\n') {
-						/* end but invalid */
-						if (buffer != NULL) {
-							free (buffer);
-							buffer = NULL;
-						}
-					}
-					/* end of message, double-loop break */
-					goto msg_complete;
-				}
-				chunk_len_str[i++] = c;
-				if (i==11) {
-					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Message is too long, buffer for length is not big enought!!!!");
-					break;
-				}
-			}
-			if (c != '\n') {
-				if (buffer != NULL) {
-					free (buffer);
-					buffer = NULL;
-				}
-				break;
-			}
-			chunk_len_str[i] = 0;
-			if ((chunk_len = atoi (chunk_len_str)) == 0) {
-				if (buffer != NULL) {
-					free (buffer);
-					buffer = NULL;
-				}
-				break;
-			}
-			buffer_size += chunk_len+1;
-			buffer = realloc (buffer, sizeof(char)*buffer_size);
-			if ((ret = recv (client, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
-				if (buffer != NULL) {
-					free (buffer);
-					buffer = NULL;
-				}
-				break;
-			}
-			buffer_len += ret;
-		}
-msg_complete:
+
+		buffer = get_framed_message(server, client);
 
 		if (buffer != NULL) {
 			enum json_tokener_error jerr;
@@ -973,7 +988,7 @@ msg_complete:
 			}
 			operation = json_object_get_int(json_object_object_get(request, "type"));
 
-			session_key = (char*) json_object_get_string(json_object_object_get(request, "session"));
+			session_key = json_object_get_string(json_object_object_get(request, "session"));
 			/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 			if (operation != MSG_CONNECT && session_key == NULL) {
 				reply =  json_object_new_object();
@@ -1037,14 +1052,16 @@ msg_complete:
 				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
 				if ((host == NULL) || (user == NULL)) {
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
-					session_key = NULL;
+					session_key_hash = NULL;
 				} else {
-					session_key = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass, cpblts);
-               nc_cpblts_free (cpblts);
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key);
+					session_key_hash = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass, cpblts);
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key_hash);
+				}
+				if (cpblts != NULL) {
+					nc_cpblts_free(cpblts);
 				}
 
-				if (session_key == NULL) {
+				if (session_key_hash == NULL) {
 					/* negative reply */
 					if (err_reply == NULL) {
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
@@ -1059,9 +1076,9 @@ msg_complete:
 				} else {
 					/* positive reply */
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-					json_object_object_add(reply, "session", json_object_new_string(session_key));
+					json_object_object_add(reply, "session", json_object_new_string(session_key_hash));
 
-					free(session_key);
+					free(session_key_hash);
 				}
 
 				break;
@@ -1416,22 +1433,23 @@ msg_complete:
 			/* send reply to caller */
 			if (reply != NULL) {
 				msgtext = json_object_to_json_string(reply);
-				if (asprintf (&chunked_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
+				if (asprintf (&chunked_out_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
 					if (buffer != NULL) {
 						free(buffer);
 						buffer = NULL;
 					}
 					break;
 				}
-				send(client, chunked_msg, strlen(chunked_msg) + 1, 0);
+				send(client, chunked_out_msg, strlen(chunked_out_msg) + 1, 0);
 				json_object_put(reply);
-				free(chunked_msg);
-				chunked_msg = NULL;
+				free(chunked_out_msg);
+				chunked_out_msg = NULL;
 				if (buffer != NULL) {
 					free(buffer);
 					buffer = NULL;
 				}
 			} else {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Reply is NULL, shouldn't be...");
 				break;
 			}
 		}
