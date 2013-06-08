@@ -915,26 +915,454 @@ msg_complete:
 	return buffer;
 }
 
+NC_DATASTORE parse_datastore(const char *ds)
+{
+	if (strcmp(ds, "running") == 0) {
+		return NC_DATASTORE_RUNNING;
+	} else if (strcmp(ds, "startup") == 0) {
+		return NC_DATASTORE_STARTUP;
+	} else if (strcmp(ds, "candidate") == 0) {
+		return NC_DATASTORE_CANDIDATE;
+	}
+	return -1;
+}
+
+json_object *create_error(const char *errmess)
+{
+	json_object *reply = json_object_new_object();
+	json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+	json_object_object_add(reply, "error-message", json_object_new_string(errmess));
+	return reply;
+
+}
+
+json_object *create_data(const char *data)
+{
+	json_object *reply = json_object_new_object();
+	json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
+	json_object_object_add(reply, "data", json_object_new_string(data));
+	return reply;
+}
+
+json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list)
+{
+	const char *host = NULL;
+	const char *port = NULL;
+	const char *user = NULL;
+	const char *pass = NULL;
+	json_object *capabilities = NULL;
+	json_object *reply = NULL;
+	char *session_key_hash = NULL;
+	struct nc_cpblts* cpblts = NULL;
+	unsigned int len, i;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Connect");
+	host = json_object_get_string(json_object_object_get((json_object *) request, "host"));
+	port = json_object_get_string(json_object_object_get((json_object *) request, "port"));
+	user = json_object_get_string(json_object_object_get((json_object *) request, "user"));
+	pass = json_object_get_string(json_object_object_get((json_object *) request, "pass"));
+
+	capabilities = json_object_object_get((json_object *) request, "capabilities");
+	if ((capabilities != NULL) && ((len = json_object_array_length(capabilities)) > 0)) {
+		cpblts = nc_cpblts_new(NULL);
+		for (i=0; i<len; i++) {
+			nc_cpblts_add(cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
+		}
+	} else {
+		ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
+	}
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
+	if ((host == NULL) || (user == NULL)) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
+		session_key_hash = NULL;
+	} else {
+		session_key_hash = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass, cpblts);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key_hash);
+	}
+	if (cpblts != NULL) {
+		nc_cpblts_free(cpblts);
+	}
+
+	if (session_key_hash == NULL) {
+		/* negative reply */
+		if (err_reply == NULL) {
+			reply = json_object_new_object();
+			json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
+			json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connection failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connect - error from libnetconf's callback.");
+		}
+	} else {
+		/* positive reply */
+		reply = json_object_new_object();
+		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		json_object_object_add(reply, "session", json_object_new_string(session_key_hash));
+
+		free(session_key_hash);
+	}
+	return reply;
+}
+
+json_object *handle_op_get(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	const char *filter = NULL;
+	const char *data = NULL;
+	json_object *reply = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get (session %s)", session_key);
+
+	filter = json_object_get_string(json_object_object_get(request, "filter"));
+
+	if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
+		if (err_reply == NULL) {
+			reply = create_error("Get information from device failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		return create_data(data);
+	}
+	return reply;
+}
+
+json_object *handle_op_getconfig(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	NC_DATASTORE ds_type_s = -1;
+	NC_DATASTORE ds_type_t = -1;
+	const char *filter = NULL;
+	const char *data = NULL;
+	const char *source = NULL;
+	const char *target = NULL;
+	json_object *reply = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
+
+	filter = json_object_get_string(json_object_object_get(request, "filter"));
+
+	/* get parameters */
+	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+		ds_type_t = parse_datastore(target);
+	}
+	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+		ds_type_s = parse_datastore(source);
+	}
+	if (ds_type_s == -1) {
+		return create_error("Invalid source repository type requested.");
+	}
+
+	if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type_s, filter)) == NULL) {
+		if (err_reply == NULL) {
+			reply = create_error("Get configuration information from device failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		return create_data(data);
+	}
+	return reply;
+}
+
+json_object *handle_op_getschema(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	const char *data = NULL;
+	const char *identifier = NULL;
+	const char *version = NULL;
+	const char *format = NULL;
+	json_object *reply = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-schema (session %s)", session_key);
+	identifier = json_object_get_string(json_object_object_get(request, "identifier"));
+	if (identifier == NULL) {
+		return create_error("No identifier for get-schema supplied.");
+	}
+	version = json_object_get_string(json_object_object_get(request, "version"));
+	format = json_object_get_string(json_object_object_get(request, "format"));
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "get-schema(version: %s, format: %s)", version, format);
+	if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, version, format)) == NULL) {
+		if (err_reply == NULL) {
+			reply = create_error("Get schema failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		return create_data(data);
+	}
+	return reply;
+}
+
+json_object *handle_op_editconfig(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	NC_DATASTORE ds_type_s = -1;
+	NC_DATASTORE ds_type_t = -1;
+	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
+	NC_EDIT_ERROPT_TYPE erropt_type = 0;
+	const char *defop = NULL;
+	const char *erropt = NULL;
+	const char *config = NULL;
+	const char *source = NULL;
+	const char *target = NULL;
+	json_object *reply = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: edit-config (session %s)", session_key);
+
+	defop = json_object_get_string(json_object_object_get(request, "default-operation"));
+	if (defop != NULL) {
+		if (strcmp(defop, "merge") == 0) {
+			defop_type = NC_EDIT_DEFOP_MERGE;
+		} else if (strcmp(defop, "replace") == 0) {
+			defop_type = NC_EDIT_DEFOP_REPLACE;
+		} else if (strcmp(defop, "none") == 0) {
+			defop_type = NC_EDIT_DEFOP_NONE;
+		} else {
+			return create_error("Invalid default-operation parameter.");
+		}
+	} else {
+		defop_type = NC_EDIT_DEFOP_NOTSET;
+	}
+
+	erropt = json_object_get_string(json_object_object_get(request, "error-option"));
+	if (erropt != NULL) {
+		if (strcmp(erropt, "continue-on-error") == 0) {
+			erropt_type = NC_EDIT_ERROPT_CONT;
+		} else if (strcmp(erropt, "stop-on-error") == 0) {
+			erropt_type = NC_EDIT_ERROPT_STOP;
+		} else if (strcmp(erropt, "rollback-on-error") == 0) {
+			erropt_type = NC_EDIT_ERROPT_ROLLBACK;
+		} else {
+			return create_error("Invalid error-option parameter.");
+		}
+	} else {
+		erropt_type = 0;
+	}
+
+	/* get parameters */
+	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+		ds_type_t = parse_datastore(target);
+	}
+	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+		ds_type_s = parse_datastore(source);
+	}
+	if (ds_type_t == -1) {
+		return create_error("Invalid target repository type requested.");
+	}
+
+	config = json_object_get_string(json_object_object_get(request, "config"));
+	if (config == NULL) {
+		return create_error("Invalid config data parameter.");
+	}
+
+	if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_NOTSET, config) != EXIT_SUCCESS) {
+		if (err_reply == NULL) {
+			reply = create_error("Edit-config failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		reply = json_object_new_object();
+		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	}
+	return reply;
+}
+
+json_object *handle_op_copyconfig(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	NC_DATASTORE ds_type_s = -1;
+	NC_DATASTORE ds_type_t = -1;
+	const char *config = NULL;
+	const char *target = NULL;
+	const char *source = NULL;
+	json_object *reply = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
+
+	/* get parameters */
+	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+		ds_type_t = parse_datastore(target);
+	}
+	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+		ds_type_s = parse_datastore(source);
+	}
+	if (source == NULL) {
+		/* no explicit source specified -> use config data */
+		ds_type_s = NC_DATASTORE_CONFIG;
+		config = json_object_get_string(json_object_object_get(request, "config"));
+	} else if (ds_type_s == -1) {
+		/* source datastore specified, but it is invalid */
+		return create_error("Invalid source repository type requested.");
+	}
+
+	if (ds_type_t == -1) {
+		/* invalid target datastore specified */
+		return create_error("Invalid target repository type requested.");
+	}
+
+	if (source == NULL && config == NULL) {
+		reply = create_error("invalid input parameters - one of source and config is required.");
+	} else {
+		if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type_s, ds_type_t, config, "") != EXIT_SUCCESS) {
+			if (err_reply == NULL) {
+				reply = create_error("Copying of configuration failed.");
+			} else {
+				/* use filled err_reply from libnetconf's callback */
+				reply = err_reply;
+			}
+		} else {
+			reply = json_object_new_object();
+			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		}
+	}
+	return reply;
+}
+
+json_object *handle_op_generic(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	json_object *reply = NULL;
+	const char *config = NULL;
+	char *data = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: generic request for session %s", session_key);
+
+	config = json_object_get_string(json_object_object_get(request, "content"));
+
+	if (config == NULL) {
+		return create_error("Missing content parameter.");
+	}
+
+	if (netconf_generic(server, netconf_sessions_list, session_key, config, &data) != EXIT_SUCCESS) {
+		if (err_reply == NULL) {
+			reply = create_error("Killing of session failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		if (data == NULL) {
+			reply = json_object_new_object();
+			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		} else {
+			return create_data(data);
+		}
+	}
+	return reply;
+}
+
+json_object *handle_op_disconnect(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	json_object *reply = NULL;
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Disconnect session %s", session_key);
+
+	if (netconf_close(server, netconf_sessions_list, session_key) != EXIT_SUCCESS) {
+		if (err_reply == NULL) {
+			reply = create_error("Invalid session identifier.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		reply = json_object_new_object();
+		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	}
+	return reply;
+}
+
+json_object *handle_op_kill(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	json_object *reply = NULL;
+	const char *sid = NULL;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: kill-session, session %s", session_key);
+
+	sid = json_object_get_string(json_object_object_get(request, "session-id"));
+
+	if (sid == NULL) {
+		return create_error("Missing session-id parameter.");
+	}
+
+	if (netconf_killsession(server, netconf_sessions_list, session_key, sid) != EXIT_SUCCESS) {
+		if (err_reply == NULL) {
+			reply = create_error("Killing of session failed.");
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
+	} else {
+		reply = json_object_new_object();
+		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	}
+	return reply;
+}
+
+json_object *handle_op_reloadhello(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	struct session_with_mutex * locked_session = NULL;
+	json_object *reply = NULL;
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
+
+	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "creating temporal NC session.");
+		struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
+		if (temp_session != NULL) {
+			prepare_status_message(server, locked_session, temp_session);
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
+			nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
+		} else {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
+			reply = create_error("Reload was unsuccessful, connection failed.");
+		}
+	} else {
+		reply = create_error("Invalid session identifier.");
+	}
+
+	if ((reply == NULL) && (locked_session->hello_message != NULL)) {
+		reply = locked_session->hello_message;
+	}
+	return reply;
+}
+
+json_object *handle_op_info(server_rec *server, apr_pool_t *pool, json_object *request, apr_hash_t *netconf_sessions_list, const char *session_key)
+{
+	json_object *reply = NULL;
+	struct session_with_mutex * locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
+
+	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	if (locked_session != NULL) {
+		if (locked_session->hello_message != NULL) {
+			reply = locked_session->hello_message;
+		} else {
+			reply = create_error("Invalid session identifier.");
+		}
+	} else {
+		reply = create_error("Invalid session identifier.");
+	}
+
+	return reply;
+}
+
 void * thread_routine (void * arg)
 {
 	void * retval = NULL;
 	struct pollfd fds;
 	json_object *request = NULL;
 	json_object *reply = NULL;
-	json_object *capabilities = NULL;
 	int operation;
-	int i, len, status= 0;
-	char *session_key_hash = NULL;
-	char *data;
-	const char *host, *port, *user, *pass;
+	int status = 0;
 	const char *msgtext;
-	const char *target, *source, *filter, *config, *defop, *erropt, *sid, *session_key;
-	const char *identifier, *version, *format;
-	struct nc_cpblts* cpblts = NULL;
-	struct session_with_mutex * locked_session;
-	NC_DATASTORE ds_type_s, ds_type_t;
-	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
-	NC_EDIT_ERROPT_TYPE erropt_type = 0;
+	const char *session_key;
+	const char *target = NULL;
+	const char *source = NULL;
+	NC_DATASTORE ds_type_t = -1;
+	NC_DATASTORE ds_type_s = -1;
 	char *chunked_out_msg = NULL;
 	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
 	apr_hash_t *netconf_sessions_list = ((struct pass_to_thread*)arg)->netconf_sessions_list;
@@ -1002,290 +1430,59 @@ void * thread_routine (void * arg)
 				break;
 			}
 
-			/* get parameters */
-			/* TODO NC_DATASTORE_URL */
-			ds_type_t = -1;
-			if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
-				if (strcmp(target, "running") == 0) {
-					ds_type_t = NC_DATASTORE_RUNNING;
-				} else if (strcmp(target, "startup") == 0) {
-					ds_type_t = NC_DATASTORE_STARTUP;
-				} else if (strcmp(target, "candidate") == 0) {
-					ds_type_t = NC_DATASTORE_CANDIDATE;
-				}
-			}
-			ds_type_s = -1;
-			if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
-				if (strcmp(source, "running") == 0) {
-					ds_type_s = NC_DATASTORE_RUNNING;
-				} else if (strcmp(source, "startup") == 0) {
-					ds_type_s = NC_DATASTORE_STARTUP;
-				} else if (strcmp(source, "candidate") == 0) {
-					ds_type_s = NC_DATASTORE_CANDIDATE;
-				}
-			}
-
 			/* null global JSON error-reply */
 			err_reply = NULL;
 
 			/* prepare reply envelope */
-			reply =  json_object_new_object();
+			reply = NULL;
 
 			/* process required operation */
 			switch (operation) {
 			case MSG_CONNECT:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Connect");
-
-				host = json_object_get_string(json_object_object_get(request, "host"));
-				port = json_object_get_string(json_object_object_get(request, "port"));
-				user = json_object_get_string(json_object_object_get(request, "user"));
-				pass = json_object_get_string(json_object_object_get(request, "pass"));
-				capabilities = json_object_object_get(request, "capabilities");
-				if ((capabilities != NULL) && ((len = json_object_array_length(capabilities)) > 0)) {
-					cpblts = nc_cpblts_new (NULL);
-					for (i=0; i<len; i++) {
-						nc_cpblts_add (cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
-					}
-				} else {
-					ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
-				}
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
-				if ((host == NULL) || (user == NULL)) {
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
-					session_key_hash = NULL;
-				} else {
-					session_key_hash = netconf_connect(server, pool, netconf_sessions_list, host, port, user, pass, cpblts);
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key_hash);
-				}
-				if (cpblts != NULL) {
-					nc_cpblts_free(cpblts);
-				}
-
-				if (session_key_hash == NULL) {
-					/* negative reply */
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
-						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connection failed.");
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connect - error from libnetconf's callback.");
-					}
-				} else {
-					/* positive reply */
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-					json_object_object_add(reply, "session", json_object_new_string(session_key_hash));
-
-					free(session_key_hash);
-				}
-
+				reply = handle_op_connect(server, pool, request, netconf_sessions_list);
 				break;
 			case MSG_GET:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get (session %s)", session_key);
-
-				filter = json_object_get_string(json_object_object_get(request, "filter"));
-
-				//ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "get filter: %p", filter);
-
-				if ((data = netconf_get(server, netconf_sessions_list, session_key, filter)) == NULL) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-					json_object_object_add(reply, "data", json_object_new_string(data));
-				}
+				reply = handle_op_get(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_GETCONFIG:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
-
-				filter = json_object_get_string(json_object_object_get(request, "filter"));
-
-				if (ds_type_s == -1) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
-					break;
-				}
-
-				if ((data = netconf_getconfig(server, netconf_sessions_list, session_key, ds_type_s, filter)) == NULL) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-					json_object_object_add(reply, "data", json_object_new_string(data));
-				}
+				reply = handle_op_getconfig(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_GETSCHEMA:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-schema (session %s)", session_key);
-				identifier = json_object_get_string(json_object_object_get(request, "identifier"));
-				if (identifier == NULL) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("No identifier for get-schema supplied."));
-					break;
-				}
-				version = json_object_get_string(json_object_object_get(request, "version"));
-				format = json_object_get_string(json_object_object_get(request, "format"));
-
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "get-schema(version: %s, format: %s)", version, format);
-				if ((data = netconf_getschema(server, netconf_sessions_list, session_key, identifier, version, format)) == NULL) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("get-config failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-					json_object_object_add(reply, "data", json_object_new_string(data));
-				}
+				reply = handle_op_getschema(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_EDITCONFIG:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: edit-config (session %s)", session_key);
-
-				defop = json_object_get_string(json_object_object_get(request, "default-operation"));
-				if (defop != NULL) {
-					if (strcmp(defop, "merge") == 0) {
-						defop_type = NC_EDIT_DEFOP_MERGE;
-					} else if (strcmp(defop, "replace") == 0) {
-						defop_type = NC_EDIT_DEFOP_REPLACE;
-					} else if (strcmp(defop, "none") == 0) {
-						defop_type = NC_EDIT_DEFOP_NONE;
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid default-operation parameter."));
-						break;
-					}
-				} else {
-					defop_type = NC_EDIT_DEFOP_NOTSET;
-				}
-
-				erropt = json_object_get_string(json_object_object_get(request, "error-option"));
-				if (erropt != NULL) {
-					if (strcmp(erropt, "continue-on-error") == 0) {
-						erropt_type = NC_EDIT_ERROPT_CONT;
-					} else if (strcmp(erropt, "stop-on-error") == 0) {
-						erropt_type = NC_EDIT_ERROPT_STOP;
-					} else if (strcmp(erropt, "rollback-on-error") == 0) {
-						erropt_type = NC_EDIT_ERROPT_ROLLBACK;
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid error-option parameter."));
-						break;
-					}
-				} else {
-					erropt_type = 0;
-				}
-
-				if (ds_type_t == -1) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
-					break;
-				}
-
-				config = json_object_get_string(json_object_object_get(request, "config"));
-				if (config == NULL) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid config data parameter."));
-					break;
-				}
-
-				/* TODO url capability see netconf_editconfig */
-				/* TODO TESTSET - :validate:1.1 capability? http://tools.ietf.org/html/rfc6241#section-7.2 */
-				if (netconf_editconfig(server, netconf_sessions_list, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_NOTSET, config) != EXIT_SUCCESS) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("edit-config failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-				}
+				reply = handle_op_editconfig(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_COPYCONFIG:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
-				config = NULL;
-
-				if (source == NULL) {
-					/* no explicit source specified -> use config data */
-					ds_type_s = NC_DATASTORE_CONFIG;
-					config = json_object_get_string(json_object_object_get(request, "config"));
-				} else if (ds_type_s == -1) {
-					/* source datastore specified, but it is invalid */
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid source repository type requested."));
-					break;
-				}
-
-				if (ds_type_t == -1) {
-					/* invalid target datastore specified */
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
-					break;
-				}
-
-				if (source == NULL && config == NULL) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("invalid input parameters - one of source and config is required."));
-				} else {
-					if (netconf_copyconfig(server, netconf_sessions_list, session_key, ds_type_s, ds_type_t, config, "") != EXIT_SUCCESS) {
-						if (err_reply == NULL) {
-							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-							json_object_object_add(reply, "error-message", json_object_new_string("copy-config failed."));
-						} else {
-							/* use filled err_reply from libnetconf's callback */
-							json_object_put(reply);
-							reply = err_reply;
-						}
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-					}
-				}
+				reply = handle_op_copyconfig(server, pool, request, netconf_sessions_list, session_key);
 				break;
+
 			case MSG_DELETECONFIG:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
-				/* no break - unifying code */
 			case MSG_LOCK:
-				if (operation == MSG_LOCK) {
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: lock (session %s)", session_key);
-				}
-				/* no break - unifying code */
 			case MSG_UNLOCK:
-				if (operation == MSG_UNLOCK) {
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
+				/* get parameters */
+				if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+					ds_type_t = parse_datastore(target);
+				}
+				if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+					ds_type_s = parse_datastore(source);
 				}
 
 				if (ds_type_t == -1) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid target repository type requested."));
+					reply = create_error("Invalid target repository type requested.");
 					break;
 				}
-
 				switch(operation) {
 				case MSG_DELETECONFIG:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
 					status = netconf_deleteconfig(server, netconf_sessions_list, session_key, ds_type_t);
 					break;
 				case MSG_LOCK:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: lock (session %s)", session_key);
 					status = netconf_lock(server, netconf_sessions_list, session_key, ds_type_t);
 					break;
 				case MSG_UNLOCK:
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
 					status = netconf_unlock(server, netconf_sessions_list, session_key, ds_type_t);
 					break;
 				default:
@@ -1295,141 +1492,41 @@ void * thread_routine (void * arg)
 
 				if (status != EXIT_SUCCESS) {
 					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("operation failed."));
+						/** \todo more clever error message wanted */
+						reply = create_error("operation failed.");
 					} else {
 						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
 						reply = err_reply;
 					}
 				} else {
+					reply = json_object_new_object();
 					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 				}
 				break;
 			case MSG_KILL:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: kill-session, session %s", session_key);
-
-				sid = json_object_get_string(json_object_object_get(request, "session-id"));
-
-				if (sid == NULL) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Missing session-id parameter."));
-					break;
-				}
-
-				if (netconf_killsession(server, netconf_sessions_list, session_key, sid) != EXIT_SUCCESS) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("kill-session failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-				}
+				reply = handle_op_kill(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_DISCONNECT:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Disconnect session %s", session_key);
-
-				if (netconf_close(server, netconf_sessions_list, session_key) != EXIT_SUCCESS) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-				}
+				reply = handle_op_disconnect(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_RELOADHELLO:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
-
-				locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-				if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "creating temporal NC session.");
-					struct nc_session *temp_session = nc_session_connect_channel(locked_session->session, NULL);
-					if (temp_session != NULL) {
-						prepare_status_message(server, locked_session, temp_session);
-						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
-						nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
-					} else {
-						ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
-					}
-				} else {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
-					break;
-				}
-				/* do NOT insert "break" here, we want to give new info back */;
+				reply = handle_op_reloadhello(server, pool, request, netconf_sessions_list, session_key);
+				break;
 			case MSG_INFO:
-				if (operation != MSG_INFO) {
-					if (locked_session->hello_message != NULL) {
-						json_object_put(reply);
-						reply = locked_session->hello_message;
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
-					}
-				} else {
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
-
-					locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-					if (locked_session != NULL) {
-						if (locked_session->hello_message != NULL) {
-							json_object_put(reply);
-							reply = locked_session->hello_message;
-						} else {
-							json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-							json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
-						}
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("Invalid session identifier."));
-					}
-				}
+				reply = handle_op_info(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			case MSG_GENERIC:
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: generic request for session %s", session_key);
-
-				config = json_object_get_string(json_object_object_get(request, "content"));
-
-				if (config == NULL) {
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-					json_object_object_add(reply, "error-message", json_object_new_string("Missing content parameter."));
-					break;
-				}
-
-				if (netconf_generic(server, netconf_sessions_list, session_key, config, &data) != EXIT_SUCCESS) {
-					if (err_reply == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-						json_object_object_add(reply, "error-message", json_object_new_string("kill-session failed."));
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						json_object_put(reply);
-						reply = err_reply;
-					}
-				} else {
-					if (data == NULL) {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-					} else {
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
-						json_object_object_add(reply, "data", json_object_new_string(data));
-					}
-				}
+				reply = handle_op_generic(server, pool, request, netconf_sessions_list, session_key);
 				break;
 			default:
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);
-				json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-				json_object_object_add(reply, "error-message", json_object_new_string("Operation not supported."));
+				reply = create_error("Operation not supported.");
 				break;
 			}
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Clean request json object.");
 			json_object_put(request);
 
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Send reply json object.");
 			/* send reply to caller */
 			if (reply != NULL) {
 				msgtext = json_object_to_json_string(reply);
