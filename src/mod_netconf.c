@@ -301,6 +301,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, apr_hash_t* c
 		locked_session->session = session;
 		locked_session->last_activity = apr_time_now();
 		locked_session->hello_message = NULL;
+		locked_session->closed = 0;
 		pthread_mutex_init (&locked_session->lock, NULL);
 		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
@@ -338,14 +339,49 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 	struct nc_session *ns = NULL;
 	struct session_with_mutex * locked_session;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Key in hash to get: %s", session_key);
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Key in hash to close: %s", session_key);
 	/* get exclusive (write) access to sessions_list (conns) */
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "lock session lock.");
 	if (pthread_rwlock_wrlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
 		return EXIT_FAILURE;
 	}
 	locked_session = (struct session_with_mutex *)apr_hash_get(conns, session_key, APR_HASH_KEY_STRING);
 	if (locked_session != NULL) {
+		/** \todo free all notifications from queue */
+		ns = locked_session->session;
+	}
+	if (ns != NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "lock private lock.");
+		if (pthread_mutex_lock(&locked_session->lock) != 0) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
+		locked_session->ntfc_subscribed = 0;
+		locked_session->closed = 1;
+		nc_session_close (ns, NC_SESSION_TERM_CLOSED);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "session closed.");
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "unlock private lock.");
+		if (pthread_mutex_unlock(&locked_session->lock) != 0) {
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "unlock session lock.");
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "closed session, disabled notif(?), wait 2s");
+		sleep(2); /* let notification thread stop */
+		/* remove session from the active sessions list */
+		apr_hash_set(conns, session_key, APR_HASH_KEY_STRING, NULL);
+		/* end of critical section */
+
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "lock session lock.");
+		if (pthread_rwlock_wrlock (&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
 		/** \todo free all notifications from queue */
 		apr_array_clear(locked_session->notifications);
 		pthread_mutex_destroy(&locked_session->lock);
@@ -354,26 +390,21 @@ static int netconf_close(server_rec* server, apr_hash_t* conns, const char* sess
 			json_object_put(locked_session->hello_message);
 			locked_session->hello_message = NULL;
 		}
-		free (locked_session);
-	}
-	if (ns != NULL) {
-		nc_session_close (ns, NC_SESSION_TERM_CLOSED);
-		nc_session_free (ns);
+		nc_session_free(ns);
 		ns = NULL;
-
-		/* remove session from the active sessions list */
-		apr_hash_set(conns, session_key, APR_HASH_KEY_STRING, NULL);
-		/* end of critical section */
+		free (locked_session);
+		locked_session = NULL;
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "unlock session lock.");
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 			return EXIT_FAILURE;
 		}
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session closed");
-
+		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session closed, everything cleared.");
 		return (EXIT_SUCCESS);
 	} else {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "unlock session lock.");
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 			return EXIT_FAILURE;
 		}
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to close");
@@ -1417,11 +1448,10 @@ void * thread_routine (void * arg)
 			operation = json_object_get_int(json_object_object_get(request, "type"));
 
 			session_key = json_object_get_string(json_object_object_get(request, "session"));
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "operation %d session_key %s.", operation, session_key);
 			/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 			if (operation != MSG_CONNECT && session_key == NULL) {
-				reply =  json_object_new_object();
-				json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-				json_object_object_add(reply, "error-message", json_object_new_string("Missing session specification."));
+				reply = create_error("Missing session specification.");
 				msgtext = json_object_to_json_string(reply);
 				send(client, msgtext, strlen(msgtext) + 1, 0);
 				json_object_put(reply);
@@ -1575,7 +1605,13 @@ static void close_all_nc_sessions(server_rec* server, apr_pool_t *p, apr_hash_t 
 	struct nc_session *ns = NULL;
 	const char *hashed_key = NULL;
 	apr_ssize_t hashed_key_length;
+	int ret;
 
+	/* get exclusive access to sessions_list (conns) */
+	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", ret, strerror(ret));
+		return;
+	}
 	for (hi = apr_hash_first(p, ht); hi; hi = apr_hash_next(hi)) {
 		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
@@ -1591,6 +1627,10 @@ static void close_all_nc_sessions(server_rec* server, apr_pool_t *p, apr_hash_t 
 			pthread_mutex_unlock(&swm->lock);
 		}
 	}
+	/* get exclusive access to sessions_list (conns) */
+	if (pthread_rwlock_unlock (&session_lock) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+	}
 }
 
 static void check_timeout_and_close(server_rec* server, apr_pool_t *p, apr_hash_t *ht)
@@ -1602,7 +1642,13 @@ static void check_timeout_and_close(server_rec* server, apr_pool_t *p, apr_hash_
 	const char *hashed_key = NULL;
 	apr_ssize_t hashed_key_length;
 	apr_time_t current_time = apr_time_now();
+	int ret;
 
+	/* get exclusive access to sessions_list (conns) */
+	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", ret, strerror(ret));
+		return;
+	}
 	for (hi = apr_hash_first(p, ht); hi; hi = apr_hash_next(hi)) {
 		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
 		swm = (struct session_with_mutex *) val;
@@ -1623,6 +1669,10 @@ static void check_timeout_and_close(server_rec* server, apr_pool_t *p, apr_hash_
 			apr_hash_set(ht, hashed_key, APR_HASH_KEY_STRING, NULL);
 		}
 		pthread_mutex_unlock(&swm->lock);
+	}
+	/* get exclusive access to sessions_list (conns) */
+	if (pthread_rwlock_unlock (&session_lock) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }
 

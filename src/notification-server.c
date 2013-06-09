@@ -366,19 +366,7 @@ struct session_with_mutex *get_ncsession_from_key(const char *session_key)
 	if (session_key == NULL) {
 		return (NULL);
 	}
-	if (pthread_rwlock_wrlock(&session_lock) != 0) {
-		#ifndef TEST_NOTIFICATION_SERVER
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-		#endif
-		return (NULL);
-	}
 	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_locked_sessions, session_key, APR_HASH_KEY_STRING);
-	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		#ifndef TEST_NOTIFICATION_SERVER
-		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		#endif
-		return (NULL);
-	}
 	return locked_session;
 }
 
@@ -470,17 +458,28 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	notification_t *ntf = NULL;
 	char *session_hash = NULL;
 
-	if (http_server != NULL) {
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "Accepted notif: %lu %s\n", (unsigned long int) eventtime, content);
-	}
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Accepted notif: %lu %s\n", (unsigned long int) eventtime, content);
 
 	session_hash = pthread_getspecific(thread_key);
 	if (http_server != NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: fileprint getspecific (%s)", session_hash);
 	}
+	if (pthread_rwlock_wrlock(&session_lock) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		#endif
+		return;
+	}
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Get session with mutex from key %s.", session_hash);
 	target_session = get_ncsession_from_key(session_hash);
 	if (target_session == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "no session found last_session_key (%s)", session_hash);
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+#ifndef TEST_NOTIFICATION_SERVER
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+#endif
+			return;
+		}
 		return;
 	}
 
@@ -506,7 +505,13 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	if (ntf == NULL) {
 		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Failed to allocate element ");
 		if (pthread_mutex_unlock(&target_session->lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			return;
+		}
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+#ifndef TEST_NOTIFICATION_SERVER
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+#endif
 			return;
 		}
 		return;
@@ -519,7 +524,19 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	}
 
 	if (pthread_mutex_unlock(&target_session->lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		if (pthread_rwlock_unlock (&session_lock) != 0) {
+			#ifndef TEST_NOTIFICATION_SERVER
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			#endif
+			return;
+		}
+		return;
+	}
+	if (pthread_rwlock_unlock (&session_lock) != 0) {
+		#ifndef TEST_NOTIFICATION_SERVER
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		#endif
 		return;
 	}
 }
@@ -764,39 +781,66 @@ static int callback_notification(struct libwebsocket_context *context,
 			session_key_buf[40] = '\0';
 			pss->session_key = strdup(session_key_buf);
 			sscanf(in+40, "%d %d", (int *) &start, (int *) &stop);
-			if (http_server != NULL) {
-				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: get key (%s) from (%s) (%i,%i)", pss->session_key, (char *) in, (int) start, (int) stop);
-			}
+			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: get key (%s) from (%s) (%i,%i)", pss->session_key, (char *) in, (int) start, (int) stop);
 
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "lock session lock");
+			if (pthread_rwlock_rdlock (&session_lock) != 0) {
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+				return -1;
+			}
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "get session from key (%s)", pss->session_key);
 			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
 			if (ls == NULL) {
 				if (http_server != NULL) {
-					ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: session_key not found (%s)", pss->session_key);
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notification: session_key not found (%s)", pss->session_key);
 				}
-				return 0;
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "unlock session lock");
+				if (pthread_rwlock_unlock (&session_lock) != 0) {
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+					return -1;
+				}
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Close notification client");
+				return -1;
+			}
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Found session to subscribe notif.");
+			if (ls->closed == 1) {
+				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "session already closed - handle no notification");
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "unlock session lock");
+				if (pthread_rwlock_unlock (&session_lock) != 0) {
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+					return -1;
+				}
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Close notification client");
+				return -1;
 			}
 			if (ls->ntfc_subscribed != 0) {
-				ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, http_server, "notification: already subscribed");
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: already subscribed");
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "unlock session lock");
+				if (pthread_rwlock_unlock (&session_lock) != 0) {
+					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+					return -1;
+				}
+				/* do not close client, only do not subscribe again */
 				return 0;
 			}
-			if (http_server != NULL) {
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: prepare to subscribe stream");
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: prepare to subscribe stream");
+			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "unlock session lock");
+			if (pthread_rwlock_unlock (&session_lock) != 0) {
+				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+				return -1;
 			}
-
 			//if (pthread_rwlock_rdlock (&session_lock) != 0) {
 			//	ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-			//	return EXIT_FAILURE;
+			//	return -1;
 			//}
-			notif_subscribe(ls, pss->session_key, (time_t) start, (time_t) stop);
+			return notif_subscribe(ls, pss->session_key, (time_t) start, (time_t) stop);
 			//if (pthread_rwlock_unlock (&session_lock) != 0) {
 			//	ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-			//	return EXIT_FAILURE;
+			//	return -1;
 			//}
 		}
 		if (len < 6)
 			break;
-		if (strcmp((const char *)in, "reset\n") == 0)
-			pss->number = 0;
 		break;
 	/*
 	 * this just demonstrates how to use the protocol filter. If you won't
