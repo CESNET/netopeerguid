@@ -62,7 +62,7 @@ typedef struct s {} server_rec;
  * \param conns - apr_hash_t representing the list of netconf connections
  * \return 0 on success
  */
-int notification_init(apr_pool_t * pool, server_rec * server, apr_hash_t *conns);
+int notification_init(apr_pool_t * pool, server_rec * server);
 
 /**
  * \brief Handle method - passes execution into the libwebsocket library
