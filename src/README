@@ -144,3 +144,14 @@ key: content (string), value: XML data as content of the NETCONF's <rpc> envelop
 key: type (int), value: 16
 key: session (string), value: unique session identifier
 key: identifier (string), value: identifier of schema
+
+14) reloadhello Update hello message of NETCONF session
+key: type (int), value: 17
+key: session (string), value: unique session identifier
+
+15) notif_history Provide list of notifications from past.
+key: type (int), value: 18
+key: session (string), value: unique session identifier
+key: from (int64), value: start time in history
+key: to (int64), value: end time
+
