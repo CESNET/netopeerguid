@@ -702,6 +702,7 @@ ac_user_opts='
 enable_option_checking
 with_libnetconf
 with_notifications
+with_notifport
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1338,6 +1339,7 @@ Optional Packages:
   --with-libnetconf=PATH  Set the path to libnetconf (usually local GIT
                           repository)
   --without-notifications Disable notifications
+  --with-notifport=PORT   Set TCP port of websocket notification server.
 
 Some influential environment variables:
   PKG_CONFIG  path to pkg-config utility
@@ -4031,6 +4033,16 @@ else
 		CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
 
+
+fi
+
+
+
+# Check whether --with-notifport was given.
+if test "${with_notifport+set}" = set; then
+  withval=$with_notifport; CFLAGS="$CFLAGS -DNOTIFICATION_SERVER_PORT=$with_notifport"
+else
+  CFLAGS="$CFLAGS"
 
 fi
 

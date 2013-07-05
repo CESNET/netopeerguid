@@ -72,6 +72,12 @@ AC_ARG_WITH([notifications],
 	]
 )
 
+AC_ARG_WITH([notifport],
+	[AC_HELP_STRING([--with-notifport=PORT], [Set TCP port of websocket notification server.])],
+	[CFLAGS="$CFLAGS -DNOTIFICATION_SERVER_PORT=$with_notifport"],
+	[CFLAGS="$CFLAGS"]
+)
+
 CFLAGS="$CFLAGS -I/usr/include/json"
 AC_SUBST(REQS)
 AC_SUBST(BUILDREQS)

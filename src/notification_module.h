@@ -53,7 +53,9 @@ typedef struct p {} apr_pool_t;
 typedef struct s {} server_rec;
 #endif
 
+#ifndef NOTIFICATION_SERVER_PORT
 #define NOTIFICATION_SERVER_PORT	8080
+#endif
 
 /**
  * \brief Notification module initialization
