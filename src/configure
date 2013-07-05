@@ -656,6 +656,8 @@ LIBNETCONF_LIBS
 LIBNETCONF_CFLAGS
 PKG_CONFIG
 RELEASE
+USERMAIL
+USERNAME
 RPMBUILD
 INSTALL_DATA
 INSTALL_SCRIPT
@@ -1971,7 +1973,12 @@ fi
 
 
 
-RELEASE=1
+USERNAME=`git config --get user.name`
+USERMAIL=`git config --get user.email`
+
+
+
+RELEASE=2
 
 LIBS="-lnetconf -ljson"
 
@@ -1983,7 +1990,7 @@ else
 	ARCSID="-DARCSID='\\\"\$(IDNOGIT)\\\"'"
 fi
 
-REQS="$REQS httpd php json-c"
+REQS="$REQS httpd json-c"
 BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
 
 # Checks for libraries.
@@ -2222,7 +2229,7 @@ else
 $as_echo "yes" >&6; }
 	:
 fi
-    BUILDREQS="$BUILDREQS ,libnetconf-devel"
+    BUILDREQS="$BUILDREQS libnetconf-devel"
 
 fi
 
@@ -2231,7 +2238,7 @@ LIBS="$LIBS $LIBNETCONF_LIBS"
 
 
 
-REQS="$REQS , libnetconf"
+REQS="$REQS libnetconf"
 ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -4025,6 +4032,8 @@ if test "${with_notifications+set}" = set; then
 else
    CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
+		REQS="$REQS libwebsockets"
+		BUILDREQS="$BUILDREQS libwebsockets-devel"
 
 fi
 
@@ -4032,6 +4041,8 @@ else
 
 		CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
+		REQS="$REQS libwebsockets"
+		BUILDREQS="$BUILDREQS libwebsockets-devel"
 
 
 fi

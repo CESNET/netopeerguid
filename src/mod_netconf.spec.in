@@ -14,7 +14,7 @@ BuildRequires: @BUILDREQS@
 Requires: @REQS@
 
 %description
-Web user interface for Netopeer client using Symfony2 framework.
+Back-end for web user interface of Netopeer client.
 
 %prep
 %setup

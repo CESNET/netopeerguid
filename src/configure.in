@@ -12,7 +12,12 @@ AC_PROG_INSTALL
 # Check for rpmbuil
 AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild)
 
-RELEASE=1
+USERNAME=`git config --get user.name`
+USERMAIL=`git config --get user.email`
+AC_SUBST(USERNAME)
+AC_SUBST(USERMAIL)
+
+RELEASE=2
 AC_SUBST(RELEASE)
 LIBS="-lnetconf -ljson"
 
@@ -24,7 +29,7 @@ else
 	ARCSID="-DARCSID='\\\"\$(IDNOGIT)\\\"'"
 fi
 
-REQS="$REQS httpd php json-c"
+REQS="$REQS httpd json-c"
 BUILDREQS="$BUILDREQS json-c-devel httpd-devel"
 
 # Checks for libraries.
@@ -37,14 +42,14 @@ AC_ARG_WITH([libnetconf],
     LIBNETCONF_WITH=" --with-libnetconf=$withval"],
 	[# get info from pkg-config about installed package
 	PKG_CHECK_MODULES(LIBNETCONF, libnetconf)
-    BUILDREQS="$BUILDREQS ,libnetconf-devel"]
+    BUILDREQS="$BUILDREQS libnetconf-devel"]
 )
 CFLAGS="$LIBNETCONF_CFLAGS"
 LIBS="$LIBS $LIBNETCONF_LIBS"
 AC_SUBST([LIBNETCONF_LIBS])
 AC_SUBST([LIBNETCONF_CFLAGS])
 AC_SUBST([LIBNETCONF_WITH])
-REQS="$REQS , libnetconf"
+REQS="$REQS libnetconf"
 AC_CHECK_LIB([netconf], [ncds_new],[],AC_MSG_ERROR([libnetconf not found.]))
 
 # Checks for header files.
@@ -65,10 +70,14 @@ AC_ARG_WITH([notifications],
 	AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
 	[ CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
+		REQS="$REQS libwebsockets"
+		BUILDREQS="$BUILDREQS libwebsockets-devel"
 	]),
 	[
 		CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS "
 		LIBS="-lwebsockets $LIBS"
+		REQS="$REQS libwebsockets"
+		BUILDREQS="$BUILDREQS libwebsockets-devel"
 	]
 )
 
