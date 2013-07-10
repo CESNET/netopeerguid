@@ -925,7 +925,7 @@ void clb_print(NC_VERB_LEVEL level, const char* msg)
 }
 
 /**
- * Receive message from client and return pointer to it.
+ * Receive message from client over UNIX socket and return pointer to it.
  * Caller should free message memory.
  * \param[in] client	socket descriptor of client
  * \param[in] server	httpd server for logging
@@ -1535,7 +1535,7 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 
 			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Send NC subscribe.");
 			/** \todo replace with sth like netconf_op(http_server, session_hash, rpc) */
-			if (netconf_process_op(server, temp_session, rpc) != 0) {
+			if (netconf_process_op(server, temp_session, rpc) != EXIT_SUCCESS) {
 				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Subscription RPC failed.");
 				return create_error("Subscription RPC failed.");
 			}
