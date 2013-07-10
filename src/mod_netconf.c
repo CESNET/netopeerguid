@@ -1817,16 +1817,6 @@ static void close_all_nc_sessions(server_rec* server, apr_pool_t *p)
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
 		swm = (struct session_with_mutex *) val;
 		if (swm != NULL) {
-			//pthread_mutex_lock(&swm->lock);
-			//if (swm->session != NULL) {
-			//	swm->closed = 1;
-			//	ns = swm->session;
-			//	nc_session_close(ns, NC_SESSION_TERM_CLOSED);
-			//	nc_session_free(ns);
-			//	swm->session = NULL;
-			//}
-			//pthread_mutex_unlock(&swm->lock);
-
 			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
 			pthread_mutex_unlock(&swm->lock);
 
@@ -1842,8 +1832,6 @@ static void close_all_nc_sessions(server_rec* server, apr_pool_t *p)
 
 static void check_timeout_and_close(server_rec* server, apr_pool_t *p)
 {
-/** \todo fix locking */
-return;
 	apr_hash_index_t *hi;
 	void *val = NULL;
 	struct nc_session *ns = NULL;
@@ -1871,9 +1859,6 @@ return;
 		pthread_mutex_lock(&swm->lock);
 		if ((current_time - swm->last_activity) > apr_time_from_sec(ACTIVITY_TIMEOUT)) {
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
-			//nc_session_close(ns, NC_SESSION_TERM_CLOSED);
-			//nc_session_free (ns);
-			//ns = NULL;
 			/* remove session from the active sessions list */
 			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
 			pthread_mutex_unlock(&swm->lock);
