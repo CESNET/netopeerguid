@@ -110,7 +110,7 @@ pthread_rwlock_t session_lock; /**< mutex protecting netconf_sessions_list from 
 pthread_mutex_t ntf_history_lock; /**< mutex protecting notification history list */
 apr_hash_t *netconf_sessions_list = NULL;
 
-json_object *notif_history_array = NULL;
+static pthread_key_t notif_history_key;
 server_rec *http_server = NULL;
 
 volatile int isterminated = 0;
@@ -1471,7 +1471,12 @@ json_object *handle_op_info(server_rec *server, apr_pool_t *pool, json_object *r
 
 void notification_history(time_t eventtime, const char *content)
 {
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Got notification from history.");
+	json_object *notif_history_array = (json_object *) pthread_getspecific(notif_history_key);
+	if (notif_history_array == NULL) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "No list of notification history found.");
+		return;
+	}
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Got notification from history %lu.", (long unsigned) eventtime);
 	json_object *notif = json_object_new_object();
 	if (notif == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Could not allocate memory for notification (json).");
@@ -1538,7 +1543,10 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 
 			pthread_mutex_unlock(&locked_session->lock);
 			pthread_mutex_lock(&ntf_history_lock);
-			notif_history_array = json_object_new_array();
+			json_object *notif_history_array = json_object_new_array();
+			if (pthread_setspecific(notif_history_key, notif_history_array) != 0) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notif_history: cannot set thread-specific hash value.");
+			}
 
 			ncntf_dispatch_receive(temp_session, notification_history);
 
@@ -1985,6 +1993,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Initialization of mutex failed: %d (%s)", errno, strerror(errno));
 		close (lsock);
 		return;
+	}
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "init of notif_history_key.");
+	if (pthread_key_create(&notif_history_key, NULL) != 0) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "init of notif_history_key failed");
 	}
 
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
