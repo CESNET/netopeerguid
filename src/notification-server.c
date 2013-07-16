@@ -452,7 +452,6 @@ static int send_recv_process(struct nc_session *session, const char* operation, 
  */
 static void notification_fileprint (time_t eventtime, const char* content)
 {
-	char t[128];
 	struct session_with_mutex *target_session = NULL;
 	notification_t *ntf = NULL;
 	char *session_hash = NULL;
@@ -485,9 +484,6 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	if (pthread_rwlock_unlock(&session_lock) != 0) {
 		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Error while locking rwlock");
 	}
-
-	t[0] = 0;
-	strftime(t, sizeof(t), "%c", localtime(&eventtime));
 
 	if (target_session->notifications == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "target_session->notifications is NULL");
@@ -690,12 +686,9 @@ static int callback_notification(struct libwebsocket_context *context,
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "notification: POP notifications for session");
 
 			while ((notif = (notification_t *) apr_array_pop(ls->notifications)) != NULL) {
-				char t[128];
-				memset(&t, 0, 128);
-				strftime(t, sizeof(t), "%c", localtime(&notif->eventtime));
 				n = 0;
 				json_object *notif_json = json_object_new_object();
-				json_object_object_add(notif_json, "eventtime", json_object_new_string(t));
+				json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
 				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
 
 				const char *msgtext = json_object_to_json_string(notif_json);
