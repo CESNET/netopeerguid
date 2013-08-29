@@ -569,18 +569,18 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
 	if (session == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: NETCONF session not established.");
-		return -1;
+		goto operation_failed;
 	}
 
 	/* check if notifications are allowed on this session */
 	if (nc_session_notif_allowed(session) == 0) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Notification subscription is not allowed on this session.");
-		return -1;
+		goto operation_failed;
 	}
 	/* check times */
 	if (start != -1 && stop != -1 && start > stop) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: Subscription start time must be lower than the end time.");
-		return -1;
+		goto operation_failed;
 	}
 
 	ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Prepare to execute subscription.");
@@ -589,14 +589,14 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	nc_filter_free(filter);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notifications: creating an rpc request failed.");
-		return -1;
+		goto operation_failed;
 	}
 
 	ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Send NC subscribe.");
 	/** \todo replace with sth like netconf_op(http_server, session_hash, rpc) */
 	if (send_recv_process(session, "subscribe", rpc) != 0) {
 		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Subscription RPC failed.");
-		return -1;
+		goto operation_failed;
 	}
 	rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
 	locked_session->ntfc_subscribed = 1;
@@ -616,6 +616,10 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	pthread_detach(thread);
 	ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, http_server, "Subscription finished.");
 	return 0;
+
+operation_failed:
+	pthread_mutex_unlock(&locked_session->lock);
+	return -1;
 }
 
 static int callback_notification(struct libwebsocket_context *context,
