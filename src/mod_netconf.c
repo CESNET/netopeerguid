@@ -659,6 +659,11 @@ static char* netconf_getconfig(server_rec* server, const char* session_key, NC_D
 		return (NULL);
 	}
 
+	/* tell server to show all elements even if they have default values */
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
+	}
+
 	data = netconf_opdata(server, session_key, rpc);
 	nc_rpc_free (rpc);
 	return (data);
@@ -698,6 +703,11 @@ static char* netconf_get(server_rec* server, const char* session_key, const char
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
 		return (NULL);
+	}
+
+	/* tell server to show all elements even if they have default values */
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
+		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
 	}
 
 	data = netconf_opdata(server, session_key, rpc);
@@ -1966,8 +1976,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	/* disable publickey authentication */
 	nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, -1);
-
-	ncdflt_set_basic_mode(NCWD_MODE_ALL);
 
 	/* create mutex protecting session list */
 	pthread_rwlockattr_init(&lock_attrs);
