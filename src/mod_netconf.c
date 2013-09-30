@@ -355,7 +355,7 @@ static int close_and_free_session(server_rec *server, struct session_with_mutex 
 	}
 	locked_session->ntfc_subscribed = 0;
 	locked_session->closed = 1;
-	nc_session_close(locked_session->session, NC_SESSION_TERM_CLOSED);
+	nc_session_free(locked_session->session);
 	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "session closed.");
 	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "unlock private lock.");
 	if (pthread_mutex_unlock(&locked_session->lock) != 0) {
@@ -375,9 +375,8 @@ static int close_and_free_session(server_rec *server, struct session_with_mutex 
 		//json_object_put(locked_session->hello_message);
 		locked_session->hello_message = NULL;
 	}
-	nc_session_free(locked_session->session);
 	locked_session->session = NULL;
-	free (locked_session);
+	free(locked_session);
 	locked_session = NULL;
 	ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session closed, everything cleared.");
 	return (EXIT_SUCCESS);
@@ -1429,7 +1428,7 @@ json_object *handle_op_reloadhello(server_rec *server, apr_pool_t *pool, json_ob
 		if (temp_session != NULL) {
 			prepare_status_message(server, locked_session, temp_session);
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
-			nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
+			nc_session_free(temp_session);
 		} else {
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
 			reply = create_error("Reload was unsuccessful, connection failed.");
@@ -1568,7 +1567,7 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 
 			pthread_mutex_unlock(&ntf_history_lock);
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
-			nc_session_close(temp_session, NC_SESSION_TERM_CLOSED);
+			nc_session_free(temp_session);
 		} else {
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Get history of notification failed due to channel establishment");
 			reply = create_error("Get history of notification was unsuccessful, connection failed.");
