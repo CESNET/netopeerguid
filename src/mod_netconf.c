@@ -1263,7 +1263,7 @@ json_object *handle_op_editconfig(server_rec *server, apr_pool_t *pool, json_obj
 		return create_error("Invalid config data parameter.");
 	}
 
-	if (netconf_editconfig(server, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_NOTSET, config) != EXIT_SUCCESS) {
+	if (netconf_editconfig(server, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config) != EXIT_SUCCESS) {
 		if (err_reply == NULL) {
 			reply = create_error("Edit-config failed.");
 		} else {
