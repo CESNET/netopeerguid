@@ -1026,6 +1026,8 @@ NC_DATASTORE parse_datastore(const char *ds)
 		return NC_DATASTORE_STARTUP;
 	} else if (strcmp(ds, "candidate") == 0) {
 		return NC_DATASTORE_CANDIDATE;
+	} else if (strcmp(ds, "url") == 0) {
+		return NC_DATASTORE_URL;
 	}
 	return -1;
 }
@@ -1579,9 +1581,74 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 		reply = create_error("Invalid session identifier.");
 	}
 
-	if ((reply == NULL) && (locked_session->hello_message != NULL)) {
-		reply = locked_session->hello_message;
+	return reply;
+}
+
+json_object *handle_op_validate(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+{
+	json_object *reply = NULL;
+	const char *sid = NULL;
+	const char *target = NULL;
+	const char *url = NULL;
+	struct session_with_mutex *locked_session = NULL;
+	nc_rpc *rpc = NULL;
+	NC_DATASTORE target_ds;
+
+	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: validate datastore, session %s", session_key);
+
+	sid = json_object_get_string(json_object_object_get(request, "session"));
+	target = json_object_get_string(json_object_object_get(request, "target"));
+	url = json_object_get_string(json_object_object_get(request, "url"));
+
+
+	if ((sid == NULL) || (target == NULL)) {
+		return create_error("Missing session parameter.");
 	}
+
+	if (pthread_rwlock_rdlock(&session_lock) != 0) {
+		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		return NULL;
+	}
+
+	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	if (locked_session != NULL) {
+		pthread_mutex_lock(&locked_session->lock);
+		if (pthread_rwlock_unlock(&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		}
+		/* validation */
+		target_ds = parse_datastore(target);
+		if (target_ds == NC_DATASTORE_URL) {
+			if (url != NULL) {
+				rpc = nc_rpc_validate(target_ds, url);
+			}
+		} else if ((target_ds == NC_DATASTORE_RUNNING) || (target_ds == NC_DATASTORE_STARTUP)
+			|| (target_ds == NC_DATASTORE_CANDIDATE)) {
+			rpc = nc_rpc_validate(target_ds);
+		}
+		if (rpc == NULL) {
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+			reply = create_error("Creation of RPC request failed.");
+			pthread_mutex_unlock(&locked_session->lock);
+			return reply;
+		}
+
+		if (netconf_op(server, session_key, rpc) == EXIT_SUCCESS) {
+			reply = json_object_new_object();
+			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		} else {
+			reply = create_error("Validation was not successful.");
+		}
+		nc_rpc_free (rpc);
+
+		pthread_mutex_unlock(&locked_session->lock);
+	} else {
+		if (pthread_rwlock_unlock(&session_lock) != 0) {
+			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		}
+		reply = create_error("Invalid session identifier.");
+	}
+
 	return reply;
 }
 
@@ -1755,6 +1822,9 @@ void * thread_routine (void * arg)
 				break;
 			case MSG_NTF_GETHISTORY:
 				reply = handle_op_ntfgethistory(server, pool, request, session_key);
+				break;
+			case MSG_VALIDATE:
+				reply = handle_op_validate(server, pool, request, session_key);
 				break;
 			default:
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);
