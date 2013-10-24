@@ -411,77 +411,118 @@ static int netconf_close(server_rec* server, const char* session_key)
 	}
 }
 
-int netconf_process_op(server_rec* server, struct nc_session *session, nc_rpc* rpc)
+/**
+ * Test reply message type and return error message.
+ *
+ * \param[in] server	httpd server for logging
+ * \param[in] session	nc_session internal struct
+ * \param[in] session_key session key, NULL to disable disconnect on error
+ * \param[in] msgt	RPC-REPLY message type
+ * \param[out] data
+ * \return NULL on success
+ */
+json_object *netconf_test_reply(server_rec *server, struct nc_session *session, const char *session_key, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
+{
+	NC_REPLY_TYPE replyt;
+
+	/* process the result of the operation */
+	switch (msgt) {
+		case NC_MSG_UNKNOWN:
+			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				if (session_key != NULL) {
+					netconf_close(server, session_key);
+				}
+				return create_error("Internal: Receiving RPC-REPLY failed.");
+			}
+		case NC_MSG_NONE:
+			/* there is error handled by callback */
+			(*data) = NULL;
+			return NULL;
+		case NC_MSG_REPLY:
+			switch (replyt = nc_reply_get_type(reply)) {
+				case NC_REPLY_OK:
+					(*data) = NULL;
+					return NULL;
+				case NC_REPLY_DATA:
+					if (((*data) = nc_reply_get_data (reply)) == NULL) {
+						ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+						return create_error("Internal: No data from reply received.");
+					} else {
+						return NULL;
+					}
+					break;
+				case NC_REPLY_ERROR:
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
+					(*data) = NULL;
+					return create_error(nc_reply_get_errormsg(reply));
+				default:
+					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
+					(*data) = NULL;
+					return create_error(nc_reply_get_errormsg(reply));
+			}
+			break;
+		default:
+			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
+			(*data) = NULL;
+			return create_error("Internal: Unexpected RPC-REPLY message type.");
+	}
+}
+
+json_object *netconf_unlocked_op(server_rec* server, struct nc_session *session, nc_rpc* rpc)
 {
 	nc_reply* reply = NULL;
-	int retval = EXIT_SUCCESS;
 	NC_MSG_TYPE msgt;
-	NC_REPLY_TYPE replyt;
 
 	/* check requests */
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
-		return (EXIT_FAILURE);
+		return create_error("Internal error: RPC is not created");
 	}
 
 	if (session != NULL) {
 		/* send the request and get the reply */
 		msgt = nc_session_send_recv(session, rpc, &reply);
 		/* process the result of the operation */
-		switch (msgt) {
-		case NC_MSG_UNKNOWN:
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				return (EXIT_FAILURE);
-			}
-			/* no break */
-		case NC_MSG_NONE:
-			/* there is error handled by callback */
-			return (EXIT_FAILURE);
-			break;
-		case NC_MSG_REPLY:
-			switch (replyt = nc_reply_get_type(reply)) {
-			case NC_REPLY_OK:
-				retval = EXIT_SUCCESS;
-				break;
-			default:
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-				retval = EXIT_FAILURE;
-				break;
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-			retval = EXIT_FAILURE;
-			break;
-		}
-		nc_reply_free(reply);
-		return (retval);
+		return netconf_test_reply(server, session, NULL, msgt, reply, NULL);
 	} else {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		return (EXIT_FAILURE);
+		return create_error("Internal error: Unknown session to process.");
 	}
 }
 
-int netconf_op(server_rec* server, const char* session_key, nc_rpc* rpc)
+/**
+ * Perform RPC method that returns data.
+ *
+ * \param[in] server	httpd server
+ * \param[in] session_key	session identifier
+ * \param[in] rpc	RPC message to perform
+ * \param[out] received_data	received data string, can be NULL when no data expected, value can be set to NULL if no data received
+ * \return NULL on success, json object with error otherwise
+ */
+static json_object *netconf_op(server_rec* server, const char* session_key, nc_rpc* rpc, char **received_data)
 {
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
 	nc_reply* reply = NULL;
-	int retval = EXIT_SUCCESS;
+	json_object *res = NULL;
+	char* data;
 	NC_MSG_TYPE msgt;
-	NC_REPLY_TYPE replyt;
 
 	/* check requests */
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
-		return (EXIT_FAILURE);
+		res = create_error("Internal: RPC could not be created.");
+		data = NULL;
+		goto finished;
 	}
 
 	/* get non-exclusive (read) access to sessions_list (conns) */
 	if (pthread_rwlock_rdlock (&session_lock) != 0) {
 		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-		return EXIT_FAILURE;
+		res = create_error("Internal: Lock failed.");
+		data = NULL;
+		goto finished;
 	}
 	/* get session where send the RPC */
 	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
@@ -493,16 +534,21 @@ int netconf_op(server_rec* server, const char* session_key, nc_rpc* rpc)
 		if (pthread_mutex_lock(&locked_session->lock) != 0) {
 			/* unlock before returning error */
 			if (pthread_rwlock_unlock (&session_lock) != 0) {
+
 				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-				return EXIT_FAILURE;
+				res = create_error("Internal: Could not unlock.");
+				goto finished;
 			}
-			return EXIT_FAILURE;
+			res = create_error("Internal: Could not unlock.");
 		}
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
+
 			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			res = create_error("Internal: Could not unlock.");
 		}
 
 		locked_session->last_activity = apr_time_now();
+
 		/* send the request and get the reply */
 		msgt = nc_session_send_recv(session, rpc, &reply);
 
@@ -510,133 +556,22 @@ int netconf_op(server_rec* server, const char* session_key, nc_rpc* rpc)
 		pthread_mutex_unlock(&locked_session->lock);
 		/* end of critical section */
 
-		/* process the result of the operation */
-		switch (msgt) {
-		case NC_MSG_UNKNOWN:
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				netconf_close(server, session_key);
-				return (EXIT_FAILURE);
-			}
-			/* no break */
-		case NC_MSG_NONE:
-			/* there is error handled by callback */
-			return (EXIT_FAILURE);
-			break;
-		case NC_MSG_REPLY:
-			switch (replyt = nc_reply_get_type(reply)) {
-			case NC_REPLY_OK:
-				retval = EXIT_SUCCESS;
-				break;
-			default:
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-				retval = EXIT_FAILURE;
-				break;
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-			retval = EXIT_FAILURE;
-			break;
-		}
-		nc_reply_free(reply);
-		return (retval);
+		res = netconf_test_reply(server, session, session_key, msgt, reply, &data);
 	} else {
 		/* release lock on failure */
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
 			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		return (EXIT_FAILURE);
+		res = create_error("Unknown session to process.");
+		data = NULL;
 	}
-}
-
-static char* netconf_opdata(server_rec* server, const char* session_key, nc_rpc* rpc)
-{
-	struct nc_session *session = NULL;
-	struct session_with_mutex * locked_session;
-	nc_reply* reply = NULL;
-	char* data;
-	NC_MSG_TYPE msgt;
-	NC_REPLY_TYPE replyt;
-
-	/* check requests */
-	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
-		return (NULL);
+finished:
+	nc_reply_free(reply);
+	if (received_data != NULL) {
+		(*received_data) = data;
 	}
-
-	/* get non-exclusive (read) access to sessions_list (conns) */
-	if (pthread_rwlock_rdlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-		return NULL;
-	}
-	/* get session where send the RPC */
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-	if (locked_session != NULL) {
-		session = locked_session->session;
-	}
-	if (session != NULL) {
-		/* get exclusive access to session */
-		if (pthread_mutex_lock(&locked_session->lock) != 0) {
-			/* unlock before returning error */
-			if (pthread_rwlock_unlock (&session_lock) != 0) {
-				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
-			}
-			return NULL;
-		}
-		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		}
-		locked_session->last_activity = apr_time_now();
-		/* send the request and get the reply */
-		msgt = nc_session_send_recv(session, rpc, &reply);
-
-		/* first release exclusive lock for this session */
-		pthread_mutex_unlock(&locked_session->lock);
-
-		/* process the result of the operation */
-		switch (msgt) {
-		case NC_MSG_UNKNOWN:
-			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				netconf_close(server, session_key);
-				return (NULL);
-			}
-			/* no break */
-		case NC_MSG_NONE:
-			/* there is error handled by callback */
-			return (NULL);
-			break;
-		case NC_MSG_REPLY:
-			switch (replyt = nc_reply_get_type(reply)) {
-			case NC_REPLY_DATA:
-				if ((data = nc_reply_get_data (reply)) == NULL) {
-					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-					data = NULL;
-				}
-				break;
-			default:
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-				data = NULL;
-				break;
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-			data = NULL;
-			break;
-		}
-		nc_reply_free(reply);
-		return (data);
-	} else {
-		/* release lock on failure */
-		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		}
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		return (NULL);
-	}
+	return res;
 }
 
 static char* netconf_getconfig(server_rec* server, const char* session_key, NC_DATASTORE source, const char* filter)
@@ -644,6 +579,7 @@ static char* netconf_getconfig(server_rec* server, const char* session_key, NC_D
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
 	char* data = NULL;
+	json_object *res = NULL;
 
 	/* create filter if set */
 	if (filter != NULL) {
@@ -663,8 +599,12 @@ static char* netconf_getconfig(server_rec* server, const char* session_key, NC_D
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
 	}
 
-	data = netconf_opdata(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, &data);
 	nc_rpc_free (rpc);
+	if (res == NULL) {
+		/* TODO return error message somehow */
+	}
+
 	return (data);
 }
 
@@ -672,6 +612,7 @@ static char* netconf_getschema(server_rec* server, const char* session_key, cons
 {
 	nc_rpc* rpc;
 	char* data = NULL;
+	json_object *res = NULL;
 
 	/* create requests */
 	rpc = nc_rpc_getschema(identifier, version, format);
@@ -680,8 +621,12 @@ static char* netconf_getschema(server_rec* server, const char* session_key, cons
 		return (NULL);
 	}
 
-	data = netconf_opdata(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, &data);
 	nc_rpc_free (rpc);
+	if (res == NULL) {
+		/* TODO return error message somehow */
+	}
+
 	return (data);
 }
 
@@ -690,6 +635,7 @@ static char* netconf_get(server_rec* server, const char* session_key, const char
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
 	char* data = NULL;
+	json_object *res = NULL;
 
 	/* create filter if set */
 	if (filter != NULL) {
@@ -709,15 +655,19 @@ static char* netconf_get(server_rec* server, const char* session_key, const char
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
 	}
 
-	data = netconf_opdata(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, &data);
 	nc_rpc_free (rpc);
+	if (res == NULL) {
+		/* TODO return error message somehow */
+	}
+
 	return (data);
 }
 
-static int netconf_copyconfig(server_rec* server, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
+static json_object *netconf_copyconfig(server_rec* server, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
 {
 	nc_rpc* rpc;
-	int retval = EXIT_SUCCESS;
+	json_object *res = NULL;
 
 	/* create requests */
 	if ((source == NC_DATASTORE_CONFIG) || (source == NC_DATASTORE_URL)) {
@@ -735,179 +685,118 @@ static int netconf_copyconfig(server_rec* server, const char* session_key, NC_DA
 	}
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
-	retval = netconf_op(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, NULL);
 	nc_rpc_free (rpc);
-	return (retval);
+
+	return res;
 }
 
-static int netconf_editconfig(server_rec* server, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
+static json_object *netconf_editconfig(server_rec* server, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
 {
 	nc_rpc* rpc;
-	int retval = EXIT_SUCCESS;
+	json_object *res = NULL;
 
 	/* create requests */
 	/* TODO source NC_DATASTORE_CONFIG / NC_DATASTORE_URL  */
 	rpc = nc_rpc_editconfig(target, NC_DATASTORE_CONFIG, defop, erropt, testopt, config);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
-	retval = netconf_op(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, NULL);
 	nc_rpc_free (rpc);
-	return (retval);
+
+	return res;
 }
 
-static int netconf_killsession(server_rec* server, const char* session_key, const char* sid)
+static json_object *netconf_killsession(server_rec* server, const char* session_key, const char* sid)
 {
 	nc_rpc* rpc;
-	int retval = EXIT_SUCCESS;
+	json_object *res = NULL;
 
 	/* create requests */
 	rpc = nc_rpc_killsession(sid);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
-	retval = netconf_op(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, NULL);
 	nc_rpc_free (rpc);
-	return (retval);
+	return res;
 }
 
-static int netconf_onlytargetop(server_rec* server, const char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
+static json_object *netconf_onlytargetop(server_rec* server, const char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
 {
 	nc_rpc* rpc;
-	int retval = EXIT_SUCCESS;
+	json_object *res = NULL;
 
 	/* create requests */
 	rpc = op_func(target);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
-	retval = netconf_op(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, NULL);
 	nc_rpc_free (rpc);
-	return (retval);
+	return res;
 }
 
-static int netconf_deleteconfig(server_rec* server, const char* session_key, NC_DATASTORE target)
+static json_object *netconf_deleteconfig(server_rec* server, const char* session_key, NC_DATASTORE target, const char *url)
 {
 	nc_rpc *rpc = NULL;
+	json_object *res = NULL;
 	if (target != NC_DATASTORE_URL) {
 		rpc = nc_rpc_deleteconfig(target);
 	} else {
+		rpc = nc_rpc_deleteconfig(target, url);
+	}
+	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		/* rpc = nc_rpc_deleteconfig(target, const char *url); */
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
-	return netconf_op(server, session_key, rpc);
+	res = netconf_op(server, session_key, rpc, NULL);
+	nc_rpc_free (rpc);
+	return res;
 }
 
-static int netconf_lock(server_rec* server, const char* session_key, NC_DATASTORE target)
+static json_object *netconf_lock(server_rec* server, const char* session_key, NC_DATASTORE target)
 {
 	return (netconf_onlytargetop(server, session_key, target, nc_rpc_lock));
 }
 
-static int netconf_unlock(server_rec* server, const char* session_key, NC_DATASTORE target)
+static json_object *netconf_unlock(server_rec* server, const char* session_key, NC_DATASTORE target)
 {
 	return (netconf_onlytargetop(server, session_key, target, nc_rpc_unlock));
 }
 
-/**
- * @return REPLY_OK: 0, *data == NULL
- *         REPLY_DATA: 0, *data != NULL
- *         REPLY_ERROR: 1, *data == NULL
- */
-static int netconf_generic(server_rec* server, const char* session_key, const char* content, char** data)
+static json_object *netconf_generic(server_rec* server, const char* session_key, const char* content, char** data)
 {
-	struct session_with_mutex *session = NULL;
-	nc_reply* reply = NULL;
 	nc_rpc* rpc = NULL;
-	int retval = EXIT_SUCCESS;
-	NC_MSG_TYPE msgt;
-	NC_REPLY_TYPE replyt;
+	json_object *res = NULL;
 
 	/* create requests */
 	rpc = nc_rpc_generic(content);
 	if (rpc == NULL) {
 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-		return (EXIT_FAILURE);
+		return create_error("Internal: Creating rpc request failed");
 	}
 
 	if (data != NULL) {
-		*data = NULL;
+		// TODO ?free(*data);
+		(*data) = NULL;
 	}
 
-	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		return EXIT_FAILURE;
-	}
 	/* get session where send the RPC */
-	session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-	if (session != NULL) {
-		pthread_mutex_lock(&session->lock);
-		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		}
-		/* send the request and get the reply */
-		msgt = nc_session_send_recv(session->session, rpc, &reply);
-		nc_rpc_free(rpc);
-		pthread_mutex_unlock(&session->lock);
-
-		/* process the result of the operation */
-		switch (msgt) {
-		case NC_MSG_UNKNOWN:
-			if (nc_session_get_status(session->session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
-				netconf_close(server, session_key);
-				return (EXIT_FAILURE);
-			}
-			/* no break */
-		case NC_MSG_NONE:
-			/* there is error handled by callback */
-			return (EXIT_FAILURE);
-			break;
-		case NC_MSG_REPLY:
-			switch (replyt = nc_reply_get_type(reply)) {
-			case NC_REPLY_DATA:
-				if ((data != NULL) && (*data = nc_reply_get_data (reply)) == NULL) {
-					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
-					nc_reply_free(reply);
-					return (EXIT_FAILURE);
-				}
-				retval = EXIT_SUCCESS;
-				break;
-			case NC_REPLY_OK:
-				retval = EXIT_SUCCESS;
-				break;
-			default:
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-				retval = EXIT_FAILURE;
-				break;
-			}
-			break;
-		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-			retval = EXIT_FAILURE;
-			break;
-		}
-		nc_reply_free(reply);
-
-		return (retval);
-	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
-		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-			return EXIT_FAILURE;
-		}
-		return (EXIT_FAILURE);
-	}
+	res = netconf_op(server, session_key, rpc, data);
+	nc_rpc_free (rpc);
+	return res;
 }
 
 /**
@@ -1540,15 +1429,18 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 		if (temp_session != NULL) {
 			rpc = nc_rpc_subscribe(NULL /* stream */, NULL /* filter */, &start, &stop);
 			if (rpc == NULL) {
+				pthread_mutex_unlock(&locked_session->lock);
 				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "notifications: creating an rpc request failed.");
 				return create_error("notifications: creating an rpc request failed.");
 			}
 
 			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Send NC subscribe.");
 			/** \todo replace with sth like netconf_op(http_server, session_hash, rpc) */
-			if (netconf_process_op(server, temp_session, rpc) != EXIT_SUCCESS) {
+			json_object *res = netconf_unlocked_op(server, temp_session, rpc);
+			if (res != NULL) {
+				pthread_mutex_unlock(&locked_session->lock);
 				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Subscription RPC failed.");
-				return create_error("Subscription RPC failed.");
+				return res;
 			}
 			rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
 
@@ -1569,10 +1461,10 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
 			nc_session_free(temp_session);
 		} else {
+			pthread_mutex_unlock(&locked_session->lock);
 			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Get history of notification failed due to channel establishment");
 			reply = create_error("Get history of notification was unsuccessful, connection failed.");
 		}
-		pthread_mutex_unlock(&locked_session->lock);
 	} else {
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
 			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
@@ -1632,11 +1524,9 @@ json_object *handle_op_validate(server_rec *server, apr_pool_t *pool, json_objec
 			return reply;
 		}
 
-		if (netconf_op(server, session_key, rpc) == EXIT_SUCCESS) {
+		if ((reply = netconf_op(server, session_key, rpc, NULL)) == NULL) {
 			reply = json_object_new_object();
 			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-		} else {
-			reply = create_error("Validation was not successful.");
 		}
 		nc_rpc_free (rpc);
 
@@ -1663,6 +1553,7 @@ void * thread_routine (void * arg)
 	const char *session_key;
 	const char *target = NULL;
 	const char *source = NULL;
+	const char *url = NULL;
 	NC_DATASTORE ds_type_t = -1;
 	NC_DATASTORE ds_type_s = -1;
 	char *chunked_out_msg = NULL;
@@ -1776,32 +1667,31 @@ void * thread_routine (void * arg)
 				switch(operation) {
 				case MSG_DELETECONFIG:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
-					status = netconf_deleteconfig(server, session_key, ds_type_t);
+					url = json_object_get_string(json_object_object_get(request, "url"));
+					reply = netconf_deleteconfig(server, session_key, ds_type_t, url);
 					break;
 				case MSG_LOCK:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: lock (session %s)", session_key);
-					status = netconf_lock(server, session_key, ds_type_t);
+					reply = netconf_lock(server, session_key, ds_type_t);
 					break;
 				case MSG_UNLOCK:
 					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
-					status = netconf_unlock(server, session_key, ds_type_t);
+					reply = netconf_unlock(server, session_key, ds_type_t);
 					break;
 				default:
-					status = -1;
+					reply = create_error("Internal: Unknown request type.");
 					break;
 				}
 
-				if (status != EXIT_SUCCESS) {
+				if (reply == NULL) {
 					if (err_reply == NULL) {
 						/** \todo more clever error message wanted */
-						reply = create_error("operation failed.");
+						reply = json_object_new_object();
+						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 					} else {
 						/* use filled err_reply from libnetconf's callback */
 						reply = err_reply;
 					}
-				} else {
-					reply = json_object_new_object();
-					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 				}
 				break;
 			case MSG_KILL:

@@ -84,5 +84,7 @@ typedef struct {
 
 extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
 
+json_object *create_error(const char *errmess);
+
 #endif
 
