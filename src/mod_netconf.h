@@ -85,6 +85,22 @@ typedef struct {
 extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
 
 json_object *create_error(const char *errmess);
+json_object *create_ok();
+
+extern server_rec *http_server;
+#ifndef HTTPD_INDEPENDENT
+# define APLOGERROR(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, __VA_ARGS__);
+#else
+# define APLOGERROR(...)
+#endif
+#define DEBUG(...) do { \
+	if (http_server != NULL) { \
+		APLOGERROR(__VA_ARGS__); \
+	} else { \
+		fprintf(stderr, __VA_ARGS__); \
+		fprintf(stderr, "\n"); \
+	} \
+} while (0);
 
 #endif
 

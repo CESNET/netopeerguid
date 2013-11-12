@@ -43,7 +43,9 @@
  * if advised of the possibility of such damage.
  *
  */
+#ifdef ARCSID
 static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
+#endif
 
 #include <unistd.h>
 #include <poll.h>
@@ -91,6 +93,8 @@ static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "ARCSID" $";
 #define offsetof(type, member) ((size_t) ((type *) 0)->member)
 #endif
 
+server_rec *http_server = NULL;
+
 /* timeout in msec */
 struct timeval timeout = { 1, 0 };
 
@@ -108,10 +112,10 @@ module AP_MODULE_DECLARE_DATA netconf_module;
 
 pthread_rwlock_t session_lock; /**< mutex protecting netconf_sessions_list from multiple access errors */
 pthread_mutex_t ntf_history_lock; /**< mutex protecting notification history list */
+pthread_mutex_t ntf_hist_clbc_mutex; /**< mutex protecting notification history list */
 apr_hash_t *netconf_sessions_list = NULL;
 
 static pthread_key_t notif_history_key;
-server_rec *http_server = NULL;
 
 volatile int isterminated = 0;
 
@@ -120,6 +124,7 @@ static char* password;
 static void signal_handler(int sign)
 {
 	switch (sign) {
+	case SIGINT:
 	case SIGTERM:
 		isterminated = 1;
 		break;
@@ -197,6 +202,10 @@ void netconf_callback_error_process(const char* tag,
 		const char* ns,
 		const char* sid)
 {
+	if (err_reply != NULL) {
+		json_object_put(err_reply);
+		err_reply = NULL;
+	}
 	err_reply = json_object_new_object();
 	json_object_object_add(err_reply, "type", json_object_new_int(REPLY_ERROR));
 	if (tag) json_object_object_add(err_reply, "error-tag", json_object_new_string(tag));
@@ -214,35 +223,38 @@ void netconf_callback_error_process(const char* tag,
 /**
  * should be used in locked area
  */
-void prepare_status_message(server_rec* server, struct session_with_mutex *s, struct nc_session *session)
+void prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
 {
 	json_object *json_obj = NULL;
-	//json_object *old_sid = NULL;
+	char *old_sid = NULL;
+	const char *j_old_sid = NULL;
 	const char *cpbltstr;
 	struct nc_cpblts* cpblts = NULL;
 
 	if (s == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "No session given.");
+		DEBUG("No session given.");
 		return;
 	}
 
 	if (s->hello_message != NULL) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "clean previous hello message");
+		DEBUG("clean previous hello message");
 		//json_object_put(s->hello_message);
+		j_old_sid = json_object_get_string(json_object_object_get(s->hello_message, "sid"));
+		if (j_old_sid != NULL) {
+			old_sid = strdup(j_old_sid);
+		}
 		s->hello_message = NULL;
-
-		//old_sid = json_object_object_get(s->hello_message, "sid");
 	}
 	s->hello_message = json_object_new_object();
 	if (session != NULL) {
-		/** \todo reload hello - save old sid */
-		//if (old_sid != NULL) {
-		//	/* use previous sid */
-		//	json_object_object_add(s->hello_message, "sid", old_sid);
-		//} else {
+		if (old_sid != NULL) {
+			/* use previous sid */
+			json_object_object_add(s->hello_message, "sid", json_object_new_string(old_sid));
+			free(old_sid);
+		} else {
 			/* we don't have old sid */
-		json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
-		//}
+			json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
+		}
 		json_object_object_add(s->hello_message, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
 		json_object_object_add(s->hello_message, "host", json_object_new_string(nc_session_get_host(session)));
 		json_object_object_add(s->hello_message, "port", json_object_new_string(nc_session_get_port(session)));
@@ -256,13 +268,13 @@ void prepare_status_message(server_rec* server, struct session_with_mutex *s, st
 			}
 			json_object_object_add(s->hello_message, "capabilities", json_obj);
 		}
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "%s", json_object_to_json_string(s->hello_message));
+		DEBUG("%s", json_object_to_json_string(s->hello_message));
 	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Session was not given.");
+		DEBUG("Session was not given.");
 		json_object_object_add(s->hello_message, "type", json_object_new_int(REPLY_ERROR));
 		json_object_object_add(s->hello_message, "error-message", json_object_new_string("Invalid session identifier."));
 	}
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Status info from hello message prepared");
+	DEBUG("Status info from hello message prepared");
 
 }
 
@@ -278,7 +290,7 @@ void prepare_status_message(server_rec* server, struct session_with_mutex *s, st
  *
  * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
  */
-static char* netconf_connect(server_rec* server, apr_pool_t* pool, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
+static char* netconf_connect(apr_pool_t* pool, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
 {
 	struct nc_session* session = NULL;
 	struct session_with_mutex * locked_session;
@@ -286,10 +298,10 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, const char* h
 
 	/* connect to the requested NETCONF server */
 	password = (char*)pass;
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "prepare to connect %s@%s:%s", user, host, port);
+	DEBUG("prepare to connect %s@%s:%s", user, host, port);
 	nc_verbosity(NC_VERB_DEBUG);
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
-	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "nc_session_connect done");
+	DEBUG("nc_session_connect done");
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
@@ -303,7 +315,7 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, const char* h
 		if ((locked_session = malloc (sizeof (struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
 			nc_session_free(session);
 			free (locked_session);
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
+			DEBUG("Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
 		locked_session->session = session;
@@ -311,59 +323,65 @@ static char* netconf_connect(server_rec* server, apr_pool_t* pool, const char* h
 		locked_session->hello_message = NULL;
 		locked_session->closed = 0;
 		pthread_mutex_init (&locked_session->lock, NULL);
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_lock");
+		DEBUG("Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
+		DEBUG("LOCK wrlock %s", __func__);
 		if (pthread_rwlock_wrlock (&session_lock) != 0) {
 			nc_session_free(session);
 			free (locked_session);
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
 		locked_session->notifications = apr_array_make(pool, NOTIFICATION_QUEUE_SIZE, sizeof(notification_t));
 		locked_session->ntfc_subscribed = 0;
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Add connection to the list");
+		DEBUG("Add connection to the list");
 		apr_hash_set(netconf_sessions_list, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "Before session_unlock");
+		DEBUG("Before session_unlock");
 
 		/* lock session */
+		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
 
 		/* unlock session list */
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 
 		/* store information about session from hello message for future usage */
-		prepare_status_message(server, locked_session, session);
+		prepare_status_message(locked_session, session);
 
+		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
 
-		ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session established");
+		DEBUG("NETCONF session established");
 		return (session_key);
 	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Connection could not be established");
+		DEBUG("Connection could not be established");
 		return (NULL);
 	}
 
 }
 
-static int close_and_free_session(server_rec *server, struct session_with_mutex *locked_session)
+static int close_and_free_session(struct session_with_mutex *locked_session)
 {
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "lock private lock.");
+	DEBUG("lock private lock.");
+	DEBUG("LOCK mutex %s", __func__);
 	if (pthread_mutex_lock(&locked_session->lock) != 0) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock");
+		DEBUG("Error while locking rwlock");
 	}
 	locked_session->ntfc_subscribed = 0;
 	locked_session->closed = 1;
 	nc_session_free(locked_session->session);
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "session closed.");
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "unlock private lock.");
+	DEBUG("session closed.");
+	DEBUG("unlock private lock.");
+	DEBUG("UNLOCK mutex %s", __func__);
 	if (pthread_mutex_unlock(&locked_session->lock) != 0) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock");
+		DEBUG("Error while locking rwlock");
 	}
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "unlock session lock.");
-	ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "closed session, disabled notif(?), wait 2s");
+	DEBUG("unlock session lock.");
+	DEBUG("closed session, disabled notif(?), wait 2s");
 	usleep(500000); /* let notification thread stop */
 
 	/* session shouldn't be used by now */
@@ -378,20 +396,22 @@ static int close_and_free_session(server_rec *server, struct session_with_mutex 
 	locked_session->session = NULL;
 	free(locked_session);
 	locked_session = NULL;
-	ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "NETCONF session closed, everything cleared.");
+	DEBUG("NETCONF session closed, everything cleared.");
 	return (EXIT_SUCCESS);
 }
 
-static int netconf_close(server_rec* server, const char* session_key)
+static int netconf_close(const char* session_key, json_object **reply)
 {
 	struct session_with_mutex * locked_session;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Key in hash to close: %s", session_key);
+	DEBUG("Key in hash to close: %s", session_key);
 
 	/* get exclusive (write) access to sessions_list (conns) */
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "lock session lock.");
+	DEBUG("lock session lock.");
+	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_wrlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock");
+		DEBUG("Error while locking rwlock");
+		(*reply) = create_error("Internal: Error while locking.");
 		return EXIT_FAILURE;
 	}
 	/* get session to close */
@@ -399,84 +419,106 @@ static int netconf_close(server_rec* server, const char* session_key)
 	/* remove session from the active sessions list -> nobody new can now work with session */
 	apr_hash_set(netconf_sessions_list, session_key, APR_HASH_KEY_STRING, NULL);
 
+	DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock");
+		DEBUG("Error while unlocking rwlock");
+		(*reply) = create_error("Internal: Error while unlocking.");
 	}
 
 	if ((locked_session != NULL) && (locked_session->session != NULL)) {
-		return close_and_free_session(server, locked_session);
+		return close_and_free_session(locked_session);
 	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to close");
+		DEBUG("Unknown session to close");
+		(*reply) = create_error("Internal: Unkown session to close.");
 		return (EXIT_FAILURE);
 	}
+	(*reply) = NULL;
 }
 
 /**
  * Test reply message type and return error message.
  *
- * \param[in] server	httpd server for logging
  * \param[in] session	nc_session internal struct
  * \param[in] session_key session key, NULL to disable disconnect on error
  * \param[in] msgt	RPC-REPLY message type
  * \param[out] data
  * \return NULL on success
  */
-json_object *netconf_test_reply(server_rec *server, struct nc_session *session, const char *session_key, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
+json_object *netconf_test_reply(struct nc_session *session, const char *session_key, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
 {
 	NC_REPLY_TYPE replyt;
+	json_object *err = NULL;
 
 	/* process the result of the operation */
 	switch (msgt) {
 		case NC_MSG_UNKNOWN:
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: receiving rpc-reply failed");
+				DEBUG("mod_netconf: receiving rpc-reply failed");
 				if (session_key != NULL) {
-					netconf_close(server, session_key);
+					netconf_close(session_key, &err);
+				}
+				if (err != NULL) {
+					return err;
 				}
 				return create_error("Internal: Receiving RPC-REPLY failed.");
 			}
 		case NC_MSG_NONE:
 			/* there is error handled by callback */
+			if (data != NULL) {
+				free(*data);
+			}
 			(*data) = NULL;
 			return NULL;
 		case NC_MSG_REPLY:
 			switch (replyt = nc_reply_get_type(reply)) {
 				case NC_REPLY_OK:
-					(*data) = NULL;
-					return NULL;
+					if ((data != NULL) && (*data != NULL)) {
+						free(*data);
+						(*data) = NULL;
+					}
+					return create_ok();
 				case NC_REPLY_DATA:
-					if (((*data) = nc_reply_get_data (reply)) == NULL) {
-						ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: no data from reply");
+					if (((*data) = nc_reply_get_data(reply)) == NULL) {
+						DEBUG("mod_netconf: no data from reply");
 						return create_error("Internal: No data from reply received.");
 					} else {
 						return NULL;
 					}
 					break;
 				case NC_REPLY_ERROR:
-					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-					(*data) = NULL;
+					DEBUG("mod_netconf: unexpected rpc-reply (%d)", replyt);
+					if (data != NULL) {
+						free(*data);
+						(*data) = NULL;
+					}
 					return create_error(nc_reply_get_errormsg(reply));
 				default:
-					ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected rpc-reply (%d)", replyt);
-					(*data) = NULL;
+					DEBUG("mod_netconf: unexpected rpc-reply (%d)", replyt);
+					if (data != NULL) {
+						free(*data);
+						(*data) = NULL;
+					}
 					return create_error(nc_reply_get_errormsg(reply));
 			}
 			break;
 		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: unexpected reply message received (%d)", msgt);
-			(*data) = NULL;
+			DEBUG("mod_netconf: unexpected reply message received (%d)", msgt);
+			if (data != NULL) {
+				free(*data);
+				(*data) = NULL;
+			}
 			return create_error("Internal: Unexpected RPC-REPLY message type.");
 	}
 }
 
-json_object *netconf_unlocked_op(server_rec* server, struct nc_session *session, nc_rpc* rpc)
+json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 {
 	nc_reply* reply = NULL;
 	NC_MSG_TYPE msgt;
 
 	/* check requests */
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
+		DEBUG("mod_netconf: rpc is not created");
 		return create_error("Internal error: RPC is not created");
 	}
 
@@ -484,9 +526,9 @@ json_object *netconf_unlocked_op(server_rec* server, struct nc_session *session,
 		/* send the request and get the reply */
 		msgt = nc_session_send_recv(session, rpc, &reply);
 		/* process the result of the operation */
-		return netconf_test_reply(server, session, NULL, msgt, reply, NULL);
+		return netconf_test_reply(session, NULL, msgt, reply, NULL);
 	} else {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
+		DEBUG("Unknown session to process.");
 		return create_error("Internal error: Unknown session to process.");
 	}
 }
@@ -494,32 +536,32 @@ json_object *netconf_unlocked_op(server_rec* server, struct nc_session *session,
 /**
  * Perform RPC method that returns data.
  *
- * \param[in] server	httpd server
  * \param[in] session_key	session identifier
  * \param[in] rpc	RPC message to perform
  * \param[out] received_data	received data string, can be NULL when no data expected, value can be set to NULL if no data received
  * \return NULL on success, json object with error otherwise
  */
-static json_object *netconf_op(server_rec* server, const char* session_key, nc_rpc* rpc, char **received_data)
+static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **received_data)
 {
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
 	nc_reply* reply = NULL;
 	json_object *res = NULL;
-	char* data;
+	char *data = NULL;
 	NC_MSG_TYPE msgt;
 
 	/* check requests */
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: rpc is not created");
+		DEBUG("mod_netconf: rpc is not created");
 		res = create_error("Internal: RPC could not be created.");
 		data = NULL;
 		goto finished;
 	}
 
 	/* get non-exclusive (read) access to sessions_list (conns) */
+	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 		res = create_error("Internal: Lock failed.");
 		data = NULL;
 		goto finished;
@@ -531,19 +573,22 @@ static json_object *netconf_op(server_rec* server, const char* session_key, nc_r
 	}
 	if (session != NULL) {
 		/* get exclusive access to session */
+		DEBUG("LOCK mutex %s", __func__);
 		if (pthread_mutex_lock(&locked_session->lock) != 0) {
 			/* unlock before returning error */
+			DEBUG("UNLOCK wrlock %s", __func__);
 			if (pthread_rwlock_unlock (&session_lock) != 0) {
 
-				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+				DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 				res = create_error("Internal: Could not unlock.");
 				goto finished;
 			}
 			res = create_error("Internal: Could not unlock.");
 		}
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
 
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			res = create_error("Internal: Could not unlock.");
 		}
 
@@ -553,16 +598,18 @@ static json_object *netconf_op(server_rec* server, const char* session_key, nc_r
 		msgt = nc_session_send_recv(session, rpc, &reply);
 
 		/* first release exclusive lock for this session */
+		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
 		/* end of critical section */
 
-		res = netconf_test_reply(server, session, session_key, msgt, reply, &data);
+		res = netconf_test_reply(session, session_key, msgt, reply, &data);
 	} else {
 		/* release lock on failure */
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown session to process.");
+		DEBUG("Unknown session to process.");
 		res = create_error("Unknown session to process.");
 		data = NULL;
 	}
@@ -570,11 +617,16 @@ finished:
 	nc_reply_free(reply);
 	if (received_data != NULL) {
 		(*received_data) = data;
+	} else {
+		if (data != NULL) {
+			free(data);
+			data = NULL;
+		}
 	}
 	return res;
 }
 
-static char* netconf_getconfig(server_rec* server, const char* session_key, NC_DATASTORE source, const char* filter)
+static char* netconf_getconfig(const char* session_key, NC_DATASTORE source, const char* filter, json_object **err)
 {
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
@@ -590,25 +642,27 @@ static char* netconf_getconfig(server_rec* server, const char* session_key, NC_D
 	rpc = nc_rpc_getconfig (source, f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
 	/* tell server to show all elements even if they have default values */
 	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
+		DEBUG("mod_netconf: setting withdefaults failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, &data);
+	res = netconf_op(session_key, rpc, &data);
 	nc_rpc_free (rpc);
-	if (res == NULL) {
-		/* TODO return error message somehow */
+	if (res != NULL) {
+		(*err) = res;
+	} else {
+		(*err) = NULL;
 	}
 
 	return (data);
 }
 
-static char* netconf_getschema(server_rec* server, const char* session_key, const char* identifier, const char* version, const char* format)
+static char* netconf_getschema(const char* session_key, const char* identifier, const char* version, const char* format, json_object **err)
 {
 	nc_rpc* rpc;
 	char* data = NULL;
@@ -617,20 +671,22 @@ static char* netconf_getschema(server_rec* server, const char* session_key, cons
 	/* create requests */
 	rpc = nc_rpc_getschema(identifier, version, format);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
-	res = netconf_op(server, session_key, rpc, &data);
+	res = netconf_op(session_key, rpc, &data);
 	nc_rpc_free (rpc);
-	if (res == NULL) {
-		/* TODO return error message somehow */
+	if (res != NULL) {
+		(*err) = res;
+	} else {
+		(*err) = NULL;
 	}
 
 	return (data);
 }
 
-static char* netconf_get(server_rec* server, const char* session_key, const char* filter)
+static char* netconf_get(const char* session_key, const char* filter, json_object **err)
 {
 	nc_rpc* rpc;
 	struct nc_filter *f = NULL;
@@ -646,25 +702,27 @@ static char* netconf_get(server_rec* server, const char* session_key, const char
 	rpc = nc_rpc_get (f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
 	/* tell server to show all elements even if they have default values */
 	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: setting withdefaults failed");
+		DEBUG("mod_netconf: setting withdefaults failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, &data);
+	res = netconf_op(session_key, rpc, &data);
 	nc_rpc_free (rpc);
 	if (res == NULL) {
-		/* TODO return error message somehow */
+		(*err) = res;
+	} else {
+		(*err) = NULL;
 	}
 
 	return (data);
 }
 
-static json_object *netconf_copyconfig(server_rec* server, const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
+static json_object *netconf_copyconfig(const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
@@ -684,17 +742,17 @@ static json_object *netconf_copyconfig(server_rec* server, const char* session_k
 		}
 	}
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, NULL);
+	res = netconf_op(session_key, rpc, NULL);
 	nc_rpc_free (rpc);
 
 	return res;
 }
 
-static json_object *netconf_editconfig(server_rec* server, const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
+static json_object *netconf_editconfig(const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
@@ -703,17 +761,17 @@ static json_object *netconf_editconfig(server_rec* server, const char* session_k
 	/* TODO source NC_DATASTORE_CONFIG / NC_DATASTORE_URL  */
 	rpc = nc_rpc_editconfig(target, NC_DATASTORE_CONFIG, defop, erropt, testopt, config);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, NULL);
+	res = netconf_op(session_key, rpc, NULL);
 	nc_rpc_free (rpc);
 
 	return res;
 }
 
-static json_object *netconf_killsession(server_rec* server, const char* session_key, const char* sid)
+static json_object *netconf_killsession(const char* session_key, const char* sid)
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
@@ -721,16 +779,16 @@ static json_object *netconf_killsession(server_rec* server, const char* session_
 	/* create requests */
 	rpc = nc_rpc_killsession(sid);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, NULL);
+	res = netconf_op(session_key, rpc, NULL);
 	nc_rpc_free (rpc);
 	return res;
 }
 
-static json_object *netconf_onlytargetop(server_rec* server, const char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
+static json_object *netconf_onlytargetop(const char* session_key, NC_DATASTORE target, nc_rpc* (*op_func)(NC_DATASTORE))
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
@@ -738,16 +796,16 @@ static json_object *netconf_onlytargetop(server_rec* server, const char* session
 	/* create requests */
 	rpc = op_func(target);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, NULL);
+	res = netconf_op(session_key, rpc, NULL);
 	nc_rpc_free (rpc);
 	return res;
 }
 
-static json_object *netconf_deleteconfig(server_rec* server, const char* session_key, NC_DATASTORE target, const char *url)
+static json_object *netconf_deleteconfig(const char* session_key, NC_DATASTORE target, const char *url)
 {
 	nc_rpc *rpc = NULL;
 	json_object *res = NULL;
@@ -757,26 +815,26 @@ static json_object *netconf_deleteconfig(server_rec* server, const char* session
 		rpc = nc_rpc_deleteconfig(target, url);
 	}
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
-	res = netconf_op(server, session_key, rpc, NULL);
+	res = netconf_op(session_key, rpc, NULL);
 	nc_rpc_free (rpc);
 	return res;
 }
 
-static json_object *netconf_lock(server_rec* server, const char* session_key, NC_DATASTORE target)
+static json_object *netconf_lock(const char* session_key, NC_DATASTORE target)
 {
-	return (netconf_onlytargetop(server, session_key, target, nc_rpc_lock));
+	return (netconf_onlytargetop(session_key, target, nc_rpc_lock));
 }
 
-static json_object *netconf_unlock(server_rec* server, const char* session_key, NC_DATASTORE target)
+static json_object *netconf_unlock(const char* session_key, NC_DATASTORE target)
 {
-	return (netconf_onlytargetop(server, session_key, target, nc_rpc_unlock));
+	return (netconf_onlytargetop(session_key, target, nc_rpc_unlock));
 }
 
-static json_object *netconf_generic(server_rec* server, const char* session_key, const char* content, char** data)
+static json_object *netconf_generic(const char* session_key, const char* content, char** data)
 {
 	nc_rpc* rpc = NULL;
 	json_object *res = NULL;
@@ -784,7 +842,7 @@ static json_object *netconf_generic(server_rec* server, const char* session_key,
 	/* create requests */
 	rpc = nc_rpc_generic(content);
 	if (rpc == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
+		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -794,7 +852,7 @@ static json_object *netconf_generic(server_rec* server, const char* session_key,
 	}
 
 	/* get session where send the RPC */
-	res = netconf_op(server, session_key, rpc, data);
+	res = netconf_op(session_key, rpc, data);
 	nc_rpc_free (rpc);
 	return res;
 }
@@ -803,21 +861,20 @@ static json_object *netconf_generic(server_rec* server, const char* session_key,
  * @}
  *//* netconf_operations */
 
-server_rec* clb_print_server;
 void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
 	switch (level) {
 	case NC_VERB_ERROR:
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, clb_print_server, "%s", msg);
+		DEBUG("%s", msg);
 		break;
 	case NC_VERB_WARNING:
-		ap_log_error(APLOG_MARK, APLOG_WARNING, 0, clb_print_server, "%s", msg);
+		DEBUG("%s", msg);
 		break;
 	case NC_VERB_VERBOSE:
-		ap_log_error(APLOG_MARK, APLOG_INFO, 0, clb_print_server, "%s", msg);
+		DEBUG("%s", msg);
 		break;
 	case NC_VERB_DEBUG:
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, clb_print_server, "%s", msg);
+		DEBUG("%s", msg);
 		break;
 	}
 }
@@ -826,10 +883,9 @@ void clb_print(NC_VERB_LEVEL level, const char* msg)
  * Receive message from client over UNIX socket and return pointer to it.
  * Caller should free message memory.
  * \param[in] client	socket descriptor of client
- * \param[in] server	httpd server for logging
  * \return pointer to message
  */
-char *get_framed_message(server_rec *server, int client)
+char *get_framed_message(int client)
 {
 	/* read json in chunked framing */
 	unsigned int buffer_size = 0;
@@ -872,7 +928,7 @@ char *get_framed_message(server_rec *server, int client)
 			}
 			chunk_len_str[i++] = c;
 			if (i==11) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Message is too long, buffer for length is not big enought!!!!");
+				DEBUG("Message is too long, buffer for length is not big enought!!!!");
 				break;
 			}
 		}
@@ -893,6 +949,7 @@ char *get_framed_message(server_rec *server, int client)
 		}
 		buffer_size += chunk_len+1;
 		buffer = realloc (buffer, sizeof(char)*buffer_size);
+		memset(buffer + (buffer_size-chunk_len-1), 0, chunk_len+1);
 		if ((ret = recv (client, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
 			if (buffer != NULL) {
 				free (buffer);
@@ -923,8 +980,10 @@ NC_DATASTORE parse_datastore(const char *ds)
 json_object *create_error(const char *errmess)
 {
 	json_object *reply = json_object_new_object();
+	json_object *array = json_object_new_array();
 	json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
-	json_object_object_add(reply, "error-message", json_object_new_string(errmess));
+	json_object_array_add(array, json_object_new_string(errmess));
+	json_object_object_add(reply, "errors", array);
 	return reply;
 
 }
@@ -937,7 +996,15 @@ json_object *create_data(const char *data)
 	return reply;
 }
 
-json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object *request)
+json_object *create_ok()
+{
+	json_object *reply = json_object_new_object();
+	reply = json_object_new_object();
+	json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	return reply;
+}
+
+json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 {
 	const char *host = NULL;
 	const char *port = NULL;
@@ -949,7 +1016,7 @@ json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object
 	struct nc_cpblts* cpblts = NULL;
 	unsigned int len, i;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Connect");
+	DEBUG("Request: Connect");
 	host = json_object_get_string(json_object_object_get((json_object *) request, "host"));
 	port = json_object_get_string(json_object_object_get((json_object *) request, "port"));
 	user = json_object_get_string(json_object_object_get((json_object *) request, "user"));
@@ -962,16 +1029,16 @@ json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object
 			nc_cpblts_add(cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
 		}
 	} else {
-		ap_log_error (APLOG_MARK, APLOG_ERR, 0, server, "no capabilities specified");
+		DEBUG("no capabilities specified");
 	}
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "host: %s, port: %s, user: %s", host, port, user);
+	DEBUG("host: %s, port: %s, user: %s", host, port, user);
 	if ((host == NULL) || (user == NULL)) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Cannot connect - insufficient input.");
+		DEBUG("Cannot connect - insufficient input.");
 		session_key_hash = NULL;
 	} else {
-		session_key_hash = netconf_connect(server, pool, host, port, user, pass, cpblts);
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "hash: %s", session_key_hash);
+		session_key_hash = netconf_connect(pool, host, port, user, pass, cpblts);
+		DEBUG("hash: %s", session_key_hash);
 	}
 	if (cpblts != NULL) {
 		nc_cpblts_free(cpblts);
@@ -983,11 +1050,11 @@ json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object
 			reply = json_object_new_object();
 			json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 			json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connection failed.");
+			DEBUG("Connection failed.");
 		} else {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Connect - error from libnetconf's callback.");
+			DEBUG("Connect - error from libnetconf's callback.");
 		}
 	} else {
 		/* positive reply */
@@ -1000,40 +1067,43 @@ json_object *handle_op_connect(server_rec *server, apr_pool_t *pool, json_object
 	return reply;
 }
 
-json_object *handle_op_get(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	const char *filter = NULL;
-	const char *data = NULL;
+	char *data = NULL;
 	json_object *reply = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get (session %s)", session_key);
+	DEBUG("Request: get (session %s)", session_key);
 
 	filter = json_object_get_string(json_object_object_get(request, "filter"));
 
-	if ((data = netconf_get(server, session_key, filter)) == NULL) {
-		if (err_reply == NULL) {
-			reply = create_error("Get information from device failed.");
-		} else {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
+	if ((data = netconf_get(session_key, filter, &reply)) == NULL) {
+		if (reply == NULL) {
+			if (err_reply == NULL) {
+				reply = create_error("Get information failed.");
+			} else {
+				/* use filled err_reply from libnetconf's callback */
+				reply = err_reply;
+			}
 		}
 	} else {
-		return create_data(data);
+		reply = create_data(data);
+		free(data);
 	}
 	return reply;
 }
 
-json_object *handle_op_getconfig(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	NC_DATASTORE ds_type_s = -1;
 	NC_DATASTORE ds_type_t = -1;
 	const char *filter = NULL;
-	const char *data = NULL;
+	char *data = NULL;
 	const char *source = NULL;
 	const char *target = NULL;
 	json_object *reply = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-config (session %s)", session_key);
+	DEBUG("Request: get-config (session %s)", session_key);
 
 	filter = json_object_get_string(json_object_object_get(request, "filter"));
 
@@ -1048,28 +1118,31 @@ json_object *handle_op_getconfig(server_rec *server, apr_pool_t *pool, json_obje
 		return create_error("Invalid source repository type requested.");
 	}
 
-	if ((data = netconf_getconfig(server, session_key, ds_type_s, filter)) == NULL) {
-		if (err_reply == NULL) {
-			reply = create_error("Get configuration information from device failed.");
-		} else {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
+	if ((data = netconf_getconfig(session_key, ds_type_s, filter, &reply)) == NULL) {
+		if (reply == NULL) {
+			if (err_reply == NULL) {
+				reply = create_error("Get configuration operation failed.");
+			} else {
+				/* use filled err_reply from libnetconf's callback */
+				reply = err_reply;
+			}
 		}
 	} else {
-		return create_data(data);
+		reply = create_data(data);
+		free(data);
 	}
 	return reply;
 }
 
-json_object *handle_op_getschema(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const char *session_key)
 {
-	const char *data = NULL;
+	char *data = NULL;
 	const char *identifier = NULL;
 	const char *version = NULL;
 	const char *format = NULL;
 	json_object *reply = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get-schema (session %s)", session_key);
+	DEBUG("Request: get-schema (session %s)", session_key);
 	identifier = json_object_get_string(json_object_object_get(request, "identifier"));
 	if (identifier == NULL) {
 		return create_error("No identifier for get-schema supplied.");
@@ -1077,21 +1150,24 @@ json_object *handle_op_getschema(server_rec *server, apr_pool_t *pool, json_obje
 	version = json_object_get_string(json_object_object_get(request, "version"));
 	format = json_object_get_string(json_object_object_get(request, "format"));
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "get-schema(version: %s, format: %s)", version, format);
-	if ((data = netconf_getschema(server, session_key, identifier, version, format)) == NULL) {
-		if (err_reply == NULL) {
-			reply = create_error("Get schema failed.");
-		} else {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
+	DEBUG("get-schema(version: %s, format: %s)", version, format);
+	if ((data = netconf_getschema(session_key, identifier, version, format, &reply)) == NULL) {
+		if (reply == NULL) {
+			if (err_reply == NULL) {
+				reply = create_error("Get models operation failed.");
+			} else {
+				/* use filled err_reply from libnetconf's callback */
+				reply = err_reply;
+			}
 		}
 	} else {
-		return create_data(data);
+		reply = create_data(data);
+		free(data);
 	}
 	return reply;
 }
 
-json_object *handle_op_editconfig(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	NC_DATASTORE ds_type_s = -1;
 	NC_DATASTORE ds_type_t = -1;
@@ -1104,7 +1180,7 @@ json_object *handle_op_editconfig(server_rec *server, apr_pool_t *pool, json_obj
 	const char *target = NULL;
 	json_object *reply = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: edit-config (session %s)", session_key);
+	DEBUG("Request: edit-config (session %s)", session_key);
 
 	defop = json_object_get_string(json_object_object_get(request, "default-operation"));
 	if (defop != NULL) {
@@ -1152,21 +1228,17 @@ json_object *handle_op_editconfig(server_rec *server, apr_pool_t *pool, json_obj
 		return create_error("Invalid config data parameter.");
 	}
 
-	if (netconf_editconfig(server, session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config) != EXIT_SUCCESS) {
-		if (err_reply == NULL) {
-			reply = create_error("Edit-config failed.");
-		} else {
+	reply = netconf_editconfig(session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config);
+	if (reply == NULL) {
+		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
 		}
-	} else {
-		reply = json_object_new_object();
-		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 	}
 	return reply;
 }
 
-json_object *handle_op_copyconfig(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	NC_DATASTORE ds_type_s = -1;
 	NC_DATASTORE ds_type_t = -1;
@@ -1175,7 +1247,7 @@ json_object *handle_op_copyconfig(server_rec *server, apr_pool_t *pool, json_obj
 	const char *source = NULL;
 	json_object *reply = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: copy-config (session %s)", session_key);
+	DEBUG("Request: copy-config (session %s)", session_key);
 
 	/* get parameters */
 	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
@@ -1201,28 +1273,24 @@ json_object *handle_op_copyconfig(server_rec *server, apr_pool_t *pool, json_obj
 	if (source == NULL && config == NULL) {
 		reply = create_error("invalid input parameters - one of source and config is required.");
 	} else {
-		if (netconf_copyconfig(server, session_key, ds_type_s, ds_type_t, config, "") != EXIT_SUCCESS) {
-			if (err_reply == NULL) {
-				reply = create_error("Copying of configuration failed.");
-			} else {
+		reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, "");
+		if (reply == NULL) {
+			if (err_reply != NULL) {
 				/* use filled err_reply from libnetconf's callback */
 				reply = err_reply;
 			}
-		} else {
-			reply = json_object_new_object();
-			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 		}
 	}
 	return reply;
 }
 
-json_object *handle_op_generic(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
 	const char *config = NULL;
 	char *data = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: generic request for session %s", session_key);
+	DEBUG("Request: generic request for session %s", session_key);
 
 	config = json_object_get_string(json_object_object_get(request, "content"));
 
@@ -1230,10 +1298,10 @@ json_object *handle_op_generic(server_rec *server, apr_pool_t *pool, json_object
 		return create_error("Missing content parameter.");
 	}
 
-	if (netconf_generic(server, session_key, config, &data) != EXIT_SUCCESS) {
-		if (err_reply == NULL) {
-			reply = create_error("Killing of session failed.");
-		} else {
+	/* TODO */
+	reply = netconf_generic(session_key, config, &data);
+	if (reply == NULL) {
+		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
 		}
@@ -1242,23 +1310,26 @@ json_object *handle_op_generic(server_rec *server, apr_pool_t *pool, json_object
 			reply = json_object_new_object();
 			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 		} else {
-			return create_data(data);
+			reply = create_data(data);
+			free(data);
 		}
 	}
 	return reply;
 }
 
-json_object *handle_op_disconnect(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_disconnect(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: Disconnect session %s", session_key);
+	DEBUG("Request: Disconnect session %s", session_key);
 
-	if (netconf_close(server, session_key) != EXIT_SUCCESS) {
-		if (err_reply == NULL) {
-			reply = create_error("Invalid session identifier.");
-		} else {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
+	if (netconf_close(session_key, &reply) != EXIT_SUCCESS) {
+		if (reply == NULL) {
+			if (err_reply == NULL) {
+				reply = create_error("Get configuration information from device failed.");
+			} else {
+				/* use filled err_reply from libnetconf's callback */
+				reply = err_reply;
+			}
 		}
 	} else {
 		reply = json_object_new_object();
@@ -1267,12 +1338,12 @@ json_object *handle_op_disconnect(server_rec *server, apr_pool_t *pool, json_obj
 	return reply;
 }
 
-json_object *handle_op_kill(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_kill(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
 	const char *sid = NULL;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: kill-session, session %s", session_key);
+	DEBUG("Request: kill-session, session %s", session_key);
 
 	sid = json_object_get_string(json_object_object_get(request, "session-id"));
 
@@ -1280,52 +1351,54 @@ json_object *handle_op_kill(server_rec *server, apr_pool_t *pool, json_object *r
 		return create_error("Missing session-id parameter.");
 	}
 
-	if (netconf_killsession(server, session_key, sid) != EXIT_SUCCESS) {
-		if (err_reply == NULL) {
-			reply = create_error("Killing of session failed.");
-		} else {
+	reply = netconf_killsession(session_key, sid);
+	if (reply == NULL) {
+		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
 		}
-	} else {
-		reply = json_object_new_object();
-		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
 	}
 	return reply;
 }
 
-json_object *handle_op_reloadhello(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	struct nc_session *temp_session = NULL;
 	struct session_with_mutex * locked_session = NULL;
 	json_object *reply = NULL;
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
+	DEBUG("Request: get info about session %s", session_key);
+	return create_ok();
 
+	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		return NULL;
 	}
 
 	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 	if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
+		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "creating temporal NC session.");
+		DEBUG("creating temporal NC session.");
 		temp_session = nc_session_connect_channel(locked_session->session, NULL);
 		if (temp_session != NULL) {
-			prepare_status_message(server, locked_session, temp_session);
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
+			prepare_status_message(locked_session, temp_session);
+			DEBUG("closing temporal NC session.");
 			nc_session_free(temp_session);
 		} else {
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Reload hello failed due to channel establishment");
+			DEBUG("Reload hello failed due to channel establishment");
 			reply = create_error("Reload was unsuccessful, connection failed.");
 		}
+		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
 	} else {
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1336,31 +1409,36 @@ json_object *handle_op_reloadhello(server_rec *server, apr_pool_t *pool, json_ob
 	return reply;
 }
 
-json_object *handle_op_info(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_info(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
 	struct session_with_mutex * locked_session = NULL;
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get info about session %s", session_key);
+	DEBUG("Request: get info about session %s", session_key);
 
+	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 
 	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 	if (locked_session != NULL) {
+		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		if (locked_session->hello_message != NULL) {
 			reply = locked_session->hello_message;
 		} else {
 			reply = create_error("Invalid session identifier.");
 		}
+		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
 	} else {
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1373,13 +1451,13 @@ void notification_history(time_t eventtime, const char *content)
 {
 	json_object *notif_history_array = (json_object *) pthread_getspecific(notif_history_key);
 	if (notif_history_array == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "No list of notification history found.");
+		DEBUG("No list of notification history found.");
 		return;
 	}
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Got notification from history %lu.", (long unsigned) eventtime);
+	DEBUG("Got notification from history %lu.", (long unsigned) eventtime);
 	json_object *notif = json_object_new_object();
 	if (notif == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "Could not allocate memory for notification (json).");
+		DEBUG("Could not allocate memory for notification (json).");
 		return;
 	}
 	json_object_object_add(notif, "eventtime", json_object_new_int64(eventtime));
@@ -1387,7 +1465,7 @@ void notification_history(time_t eventtime, const char *content)
 	json_object_array_add(notif_history_array, notif);
 }
 
-json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
 	const char *sid = NULL;
@@ -1398,7 +1476,7 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 	time_t stop = 0;
 	int64_t from, to;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: get notification history, session %s", session_key);
+	DEBUG("Request: get notification history, session %s", session_key);
 
 	sid = json_object_get_string(json_object_object_get(request, "session"));
 	from = json_object_get_int64(json_object_object_get(request, "from"));
@@ -1407,48 +1485,55 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 	start = time(NULL) + from;
 	stop = time(NULL) + to;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "notification history interval %li %li", (long int) from, (long int) to);
+	DEBUG("notification history interval %li %li", (long int) from, (long int) to);
 
 	if (sid == NULL) {
 		return create_error("Missing session parameter.");
 	}
 
+	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		return NULL;
 	}
 
 	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 	if (locked_session != NULL) {
+		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "creating temporal NC session.");
+		DEBUG("creating temporal NC session.");
 		temp_session = nc_session_connect_channel(locked_session->session, NULL);
 		if (temp_session != NULL) {
 			rpc = nc_rpc_subscribe(NULL /* stream */, NULL /* filter */, &start, &stop);
 			if (rpc == NULL) {
+				DEBUG("UNLOCK mutex %s", __func__);
 				pthread_mutex_unlock(&locked_session->lock);
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "notifications: creating an rpc request failed.");
+				DEBUG("notifications: creating an rpc request failed.");
 				return create_error("notifications: creating an rpc request failed.");
 			}
 
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Send NC subscribe.");
+			DEBUG("Send NC subscribe.");
 			/** \todo replace with sth like netconf_op(http_server, session_hash, rpc) */
-			json_object *res = netconf_unlocked_op(server, temp_session, rpc);
+			json_object *res = netconf_unlocked_op(temp_session, rpc);
 			if (res != NULL) {
+				DEBUG("UNLOCK mutex %s", __func__);
 				pthread_mutex_unlock(&locked_session->lock);
-				ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Subscription RPC failed.");
+				DEBUG("Subscription RPC failed.");
 				return res;
 			}
 			rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
 
+			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&locked_session->lock);
+			DEBUG("LOCK mutex %s", __func__);
 			pthread_mutex_lock(&ntf_history_lock);
 			json_object *notif_history_array = json_object_new_array();
 			if (pthread_setspecific(notif_history_key, notif_history_array) != 0) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "notif_history: cannot set thread-specific hash value.");
+				DEBUG("notif_history: cannot set thread-specific hash value.");
 			}
 
 			ncntf_dispatch_receive(temp_session, notification_history);
@@ -1457,17 +1542,20 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 			json_object_object_add(reply, "notifications", notif_history_array);
 			//json_object_put(notif_history_array);
 
+			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&ntf_history_lock);
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "closing temporal NC session.");
+			DEBUG("closing temporal NC session.");
 			nc_session_free(temp_session);
 		} else {
+			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&locked_session->lock);
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Get history of notification failed due to channel establishment");
+			DEBUG("Get history of notification failed due to channel establishment");
 			reply = create_error("Get history of notification was unsuccessful, connection failed.");
 		}
 	} else {
+		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1475,7 +1563,7 @@ json_object *handle_op_ntfgethistory(server_rec *server, apr_pool_t *pool, json_
 	return reply;
 }
 
-json_object *handle_op_validate(server_rec *server, apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	json_object *reply = NULL;
 	const char *sid = NULL;
@@ -1485,7 +1573,7 @@ json_object *handle_op_validate(server_rec *server, apr_pool_t *pool, json_objec
 	nc_rpc *rpc = NULL;
 	NC_DATASTORE target_ds;
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: validate datastore, session %s", session_key);
+	DEBUG("Request: validate datastore, session %s", session_key);
 
 	sid = json_object_get_string(json_object_object_get(request, "session"));
 	target = json_object_get_string(json_object_object_get(request, "target"));
@@ -1496,48 +1584,32 @@ json_object *handle_op_validate(server_rec *server, apr_pool_t *pool, json_objec
 		return create_error("Missing session parameter.");
 	}
 
-	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		return NULL;
-	}
-
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
-	if (locked_session != NULL) {
-		pthread_mutex_lock(&locked_session->lock);
-		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+	/* validation */
+	target_ds = parse_datastore(target);
+	if (target_ds == NC_DATASTORE_URL) {
+		if (url != NULL) {
+			rpc = nc_rpc_validate(target_ds, url);
 		}
-		/* validation */
-		target_ds = parse_datastore(target);
-		if (target_ds == NC_DATASTORE_URL) {
-			if (url != NULL) {
-				rpc = nc_rpc_validate(target_ds, url);
-			}
-		} else if ((target_ds == NC_DATASTORE_RUNNING) || (target_ds == NC_DATASTORE_STARTUP)
+	} else if ((target_ds == NC_DATASTORE_RUNNING) || (target_ds == NC_DATASTORE_STARTUP)
 			|| (target_ds == NC_DATASTORE_CANDIDATE)) {
-			rpc = nc_rpc_validate(target_ds);
-		}
-		if (rpc == NULL) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf: creating rpc request failed");
-			reply = create_error("Creation of RPC request failed.");
-			pthread_mutex_unlock(&locked_session->lock);
-			return reply;
-		}
-
-		if ((reply = netconf_op(server, session_key, rpc, NULL)) == NULL) {
-			reply = json_object_new_object();
-			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-		}
-		nc_rpc_free (rpc);
-
+		rpc = nc_rpc_validate(target_ds);
+	}
+	if (rpc == NULL) {
+		DEBUG("mod_netconf: creating rpc request failed");
+		reply = create_error("Creation of RPC request failed.");
+		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
-	} else {
-		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		}
-		reply = create_error("Invalid session identifier.");
+		return reply;
 	}
 
+	DEBUG("Request: validate datastore");
+	if ((reply = netconf_op(session_key, rpc, NULL)) == NULL) {
+		reply = json_object_new_object();
+		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	}
+	nc_rpc_free (rpc);
+
+	DEBUG("Request: validate datastore");
 	return reply;
 }
 
@@ -1558,7 +1630,7 @@ void * thread_routine (void * arg)
 	NC_DATASTORE ds_type_s = -1;
 	char *chunked_out_msg = NULL;
 	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
-	server_rec * server = ((struct pass_to_thread*)arg)->server;
+	//server_rec * server = ((struct pass_to_thread*)arg)->server;
 	int client = ((struct pass_to_thread*)arg)->client;
 
 	char *buffer = NULL;
@@ -1572,7 +1644,7 @@ void * thread_routine (void * arg)
 
 		if (status == 0 || (status == -1 && (errno == EAGAIN || (errno == EINTR && isterminated == 0)))) {
 			/* poll was interrupted - check if the isterminated is set and if not, try poll again */
-			//ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "poll interrupted");
+			//DEBUG("poll interrupted");
 			continue;
 		} else if (status < 0) {
 			/* 0:  poll time outed
@@ -1580,7 +1652,7 @@ void * thread_routine (void * arg)
 			 * -1: poll failed
 			 *     something wrong happend, close this socket and wait for another request
 			 */
-			//ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "poll failed, status %d(%d: %s)", status, errno, strerror(errno));
+			//DEBUG("poll failed, status %d(%d: %s)", status, errno, strerror(errno));
 			close(client);
 			break;
 		}
@@ -1591,26 +1663,26 @@ void * thread_routine (void * arg)
 		/* if nothing to read and POLLHUP (EOF) or POLLERR set */
 		if ((fds.revents & POLLHUP) || (fds.revents & POLLERR)) {
 			/* close client's socket (it's probably already closed by client */
-			//ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "socket error (%d)", fds.revents);
+			//DEBUG("socket error (%d)", fds.revents);
 			close(client);
 			break;
 		}
 
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Get framed message...");
-		buffer = get_framed_message(server, client);
+		DEBUG("Get framed message...");
+		buffer = get_framed_message(client);
 
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Check read buffer.");
+		DEBUG("Check read buffer.");
 		if (buffer != NULL) {
 			enum json_tokener_error jerr;
 			request = json_tokener_parse_verbose(buffer, &jerr);
 			if (jerr != json_tokener_success) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "JSON parsing error");
+				DEBUG("JSON parsing error");
 				continue;
 			}
 			operation = json_object_get_int(json_object_object_get(request, "type"));
 
 			session_key = json_object_get_string(json_object_object_get(request, "session"));
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "operation %d session_key %s.", operation, session_key);
+			DEBUG("operation %d session_key %s.", operation, session_key);
 			/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 			if (operation != MSG_CONNECT && session_key == NULL) {
 				reply = create_error("Missing session specification.");
@@ -1626,27 +1698,30 @@ void * thread_routine (void * arg)
 			err_reply = NULL;
 
 			/* prepare reply envelope */
+			if (reply != NULL) {
+				json_object_put(reply);
+			}
 			reply = NULL;
 
 			/* process required operation */
 			switch (operation) {
 			case MSG_CONNECT:
-				reply = handle_op_connect(server, pool, request);
+				reply = handle_op_connect(pool, request);
 				break;
 			case MSG_GET:
-				reply = handle_op_get(server, pool, request, session_key);
+				reply = handle_op_get(pool, request, session_key);
 				break;
 			case MSG_GETCONFIG:
-				reply = handle_op_getconfig(server, pool, request, session_key);
+				reply = handle_op_getconfig(pool, request, session_key);
 				break;
 			case MSG_GETSCHEMA:
-				reply = handle_op_getschema(server, pool, request, session_key);
+				reply = handle_op_getschema(pool, request, session_key);
 				break;
 			case MSG_EDITCONFIG:
-				reply = handle_op_editconfig(server, pool, request, session_key);
+				reply = handle_op_editconfig(pool, request, session_key);
 				break;
 			case MSG_COPYCONFIG:
-				reply = handle_op_copyconfig(server, pool, request, session_key);
+				reply = handle_op_copyconfig(pool, request, session_key);
 				break;
 
 			case MSG_DELETECONFIG:
@@ -1666,17 +1741,17 @@ void * thread_routine (void * arg)
 				}
 				switch(operation) {
 				case MSG_DELETECONFIG:
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: delete-config (session %s)", session_key);
+					DEBUG("Request: delete-config (session %s)", session_key);
 					url = json_object_get_string(json_object_object_get(request, "url"));
-					reply = netconf_deleteconfig(server, session_key, ds_type_t, url);
+					reply = netconf_deleteconfig(session_key, ds_type_t, url);
 					break;
 				case MSG_LOCK:
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: lock (session %s)", session_key);
-					reply = netconf_lock(server, session_key, ds_type_t);
+					DEBUG("Request: lock (session %s)", session_key);
+					reply = netconf_lock(session_key, ds_type_t);
 					break;
 				case MSG_UNLOCK:
-					ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Request: unlock (session %s)", session_key);
-					reply = netconf_unlock(server, session_key, ds_type_t);
+					DEBUG("Request: unlock (session %s)", session_key);
+					reply = netconf_unlock(session_key, ds_type_t);
 					break;
 				default:
 					reply = create_error("Internal: Unknown request type.");
@@ -1695,35 +1770,35 @@ void * thread_routine (void * arg)
 				}
 				break;
 			case MSG_KILL:
-				reply = handle_op_kill(server, pool, request, session_key);
+				reply = handle_op_kill(pool, request, session_key);
 				break;
 			case MSG_DISCONNECT:
-				reply = handle_op_disconnect(server, pool, request, session_key);
+				reply = handle_op_disconnect(pool, request, session_key);
 				break;
 			case MSG_RELOADHELLO:
-				reply = handle_op_reloadhello(server, pool, request, session_key);
+				reply = handle_op_reloadhello(pool, request, session_key);
 				break;
 			case MSG_INFO:
-				reply = handle_op_info(server, pool, request, session_key);
+				reply = handle_op_info(pool, request, session_key);
 				break;
 			case MSG_GENERIC:
-				reply = handle_op_generic(server, pool, request, session_key);
+				reply = handle_op_generic(pool, request, session_key);
 				break;
 			case MSG_NTF_GETHISTORY:
-				reply = handle_op_ntfgethistory(server, pool, request, session_key);
+				reply = handle_op_ntfgethistory(pool, request, session_key);
 				break;
 			case MSG_VALIDATE:
-				reply = handle_op_validate(server, pool, request, session_key);
+				reply = handle_op_validate(pool, request, session_key);
 				break;
 			default:
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Unknown mod_netconf operation requested (%d)", operation);
+				DEBUG("Unknown mod_netconf operation requested (%d)", operation);
 				reply = create_error("Operation not supported.");
 				break;
 			}
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Clean request json object.");
+			DEBUG("Clean request json object.");
 			json_object_put(request);
 
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Send reply json object.");
+			DEBUG("Send reply json object.");
 			/* send reply to caller */
 			if (reply != NULL) {
 				msgtext = json_object_to_json_string(reply);
@@ -1734,20 +1809,25 @@ void * thread_routine (void * arg)
 					}
 					break;
 				}
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Send framed reply json object.");
+				DEBUG("Send framed reply json object.");
 				send(client, chunked_out_msg, strlen(chunked_out_msg) + 1, 0);
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Clean reply json object.");
+				DEBUG("Clean reply json object.");
 				json_object_put(reply);
-				ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Clean message buffer.");
+				reply = NULL;
+				DEBUG("Clean message buffer.");
 				free(chunked_out_msg);
 				chunked_out_msg = NULL;
 				if (buffer != NULL) {
 					free(buffer);
 					buffer = NULL;
 				}
+				if (err_reply != NULL) {
+					json_object_put(err_reply);
+					err_reply = NULL;
+				}
 			} else {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Reply is NULL, shouldn't be...");
-				break;
+				DEBUG("Reply is NULL, shouldn't be...");
+				continue;
 			}
 		}
 	}
@@ -1763,11 +1843,10 @@ void * thread_routine (void * arg)
  * sessions. This function iterates over the list of sessions and close them
  * all.
  *
- * \param[in] server  pointer to server_rec for logging
  * \param[in] p  apr pool needed for hash table iterating
  * \param[in] ht  hash table of session_with_mutex structs
  */
-static void close_all_nc_sessions(server_rec* server, apr_pool_t *p)
+static void close_all_nc_sessions(apr_pool_t *p)
 {
 	apr_hash_index_t *hi;
 	void *val = NULL;
@@ -1777,29 +1856,34 @@ static void close_all_nc_sessions(server_rec* server, apr_pool_t *p)
 	int ret;
 
 	/* get exclusive access to sessions_list (conns) */
+	DEBUG("LOCK wrlock %s", __func__);
 	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", ret, strerror(ret));
+		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
 	for (hi = apr_hash_first(p, netconf_sessions_list); hi; hi = apr_hash_next(hi)) {
 		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
+		DEBUG("Closing NETCONF session (%s).", hashed_key);
 		swm = (struct session_with_mutex *) val;
 		if (swm != NULL) {
+			DEBUG("LOCK mutex %s", __func__);
+			pthread_mutex_lock(&swm->lock);
 			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
+			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&swm->lock);
 
 			/* close_and_free_session handles locking on its own */
-			close_and_free_session(server, swm);
+			close_and_free_session(swm);
 		}
 	}
 	/* get exclusive access to sessions_list (conns) */
+	DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }
 
-static void check_timeout_and_close(server_rec* server, apr_pool_t *p)
+static void check_timeout_and_close(apr_pool_t *p)
 {
 	apr_hash_index_t *hi;
 	void *val = NULL;
@@ -1811,8 +1895,9 @@ static void check_timeout_and_close(server_rec* server, apr_pool_t *p)
 	int ret;
 
 	/* get exclusive access to sessions_list (conns) */
+//DEBUG("LOCK wrlock %s", __func__);
 	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while locking rwlock: %d (%s)", ret, strerror(ret));
+		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
 	for (hi = apr_hash_first(p, netconf_sessions_list); hi; hi = apr_hash_next(hi)) {
@@ -1825,22 +1910,26 @@ static void check_timeout_and_close(server_rec* server, apr_pool_t *p)
 		if (ns == NULL) {
 			continue;
 		}
+//DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&swm->lock);
 		if ((current_time - swm->last_activity) > apr_time_from_sec(ACTIVITY_TIMEOUT)) {
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "Closing NETCONF session (%s).", hashed_key);
+			DEBUG("Closing NETCONF session (%s).", hashed_key);
 			/* remove session from the active sessions list */
 			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
+//DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&swm->lock);
 
 			/* close_and_free_session handles locking on its own */
-			close_and_free_session(server, swm);
+			close_and_free_session(swm);
 		} else {
+//DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&swm->lock);
 		}
 	}
 	/* get exclusive access to sessions_list (conns) */
+//DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		ap_log_error (APLOG_MARK, APLOG_DEBUG, 0, server, "Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }
 
@@ -1862,9 +1951,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	socklen_t len;
 	mod_netconf_cfg *cfg;
 	struct pass_to_thread * arg;
-	pthread_t * ptids = calloc (1,sizeof(pthread_t));
+	pthread_t * ptids = calloc(1, sizeof(pthread_t));
 	struct timespec maxtime;
 	pthread_rwlockattr_t lock_attrs;
+	char *sockname = NULL;
 	#ifdef WITH_NOTIFICATIONS
 	char use_notifications = 0;
 	#endif
@@ -1875,49 +1965,54 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	maxtime.tv_sec = 5;
 	maxtime.tv_nsec = 0;
 
+	#ifndef HTTPD_INDEPENDENT
 	/* change uid and gid of process for security reasons */
 	unixd_setup_child();
+	#endif
 
-	cfg = ap_get_module_config(server->module_config, &netconf_module);
-	if (cfg == NULL) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Getting mod_netconf configuration failed");
-		return;
+	if (server != NULL) {
+		cfg = ap_get_module_config(server->module_config, &netconf_module);
+		if (cfg == NULL) {
+			DEBUG("Getting mod_netconf configuration failed");
+			return;
+		}
+		sockname = cfg->sockname;
+	} else {
+		sockname = SOCKET_FILENAME;
 	}
 
 	/* create listening UNIX socket to accept incoming connections */
 	if ((lsock = socket(PF_UNIX, SOCK_STREAM, 0)) == -1) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Creating socket failed (%s)", strerror(errno));
-		return;
+		DEBUG("Creating socket failed (%s)", strerror(errno));
+		goto error_exit;
 	}
 
 	local.sun_family = AF_UNIX;
-	strncpy(local.sun_path, cfg->sockname, sizeof(local.sun_path));
+	strncpy(local.sun_path, sockname, sizeof(local.sun_path));
 	unlink(local.sun_path);
 	len = offsetof(struct sockaddr_un, sun_path) + strlen(local.sun_path);
 
 	if (bind(lsock, (struct sockaddr *) &local, len) == -1) {
 		if (errno == EADDRINUSE) {
-			ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, server, "mod_netconf socket address already in use");
-			close(lsock);
-			exit(0);
+			DEBUG("mod_netconf socket address already in use");
+			goto error_exit;
 		}
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Binding socket failed (%s)", strerror(errno));
-		close(lsock);
-		return;
+		DEBUG("Binding socket failed (%s)", strerror(errno));
+		goto error_exit;
 	}
 
 	if (listen(lsock, MAX_SOCKET_CL) == -1) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Setting up listen socket failed (%s)", strerror(errno));
-		close(lsock);
-		return;
+		DEBUG("Setting up listen socket failed (%s)", strerror(errno));
+		goto error_exit;
 	}
+	chmod(sockname, S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
 
 	/* prepare internal lists */
 	netconf_sessions_list = apr_hash_make(pool);
 
 	#ifdef WITH_NOTIFICATIONS
 	if (notification_init(pool, server) == -1) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "libwebsockets initialization failed");
+		DEBUG("libwebsockets initialization failed");
 		use_notifications = 0;
 	} else {
 		use_notifications = 1;
@@ -1926,7 +2021,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	/* setup libnetconf's callbacks */
 	nc_verbosity(NC_VERB_DEBUG);
-	clb_print_server = server;
 	nc_callback_print(clb_print);
 	nc_callback_ssh_host_authenticity_check(netconf_callback_ssh_hostkey_check);
 	nc_callback_sshauth_interactive(netconf_callback_sshauth_interactive);
@@ -1942,13 +2036,13 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	pthread_rwlockattr_setpshared(&lock_attrs, PTHREAD_PROCESS_PRIVATE);
 	/* create rw lock */
 	if (pthread_rwlock_init(&session_lock, &lock_attrs) != 0) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Initialization of mutex failed: %d (%s)", errno, strerror(errno));
-		close (lsock);
-		return;
+		DEBUG("Initialization of mutex failed: %d (%s)", errno, strerror(errno));
+		goto error_exit;
 	}
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, "init of notif_history_key.");
+	pthread_mutex_init(&ntf_history_lock, NULL);
+	DEBUG("init of notif_history_key.");
 	if (pthread_key_create(&notif_history_key, NULL) != 0) {
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, "init of notif_history_key failed");
+		DEBUG("init of notif_history_key failed");
 	}
 
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
@@ -1957,20 +2051,20 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		timediff = (unsigned int)tv.tv_sec - olds;
 		#ifdef WITH_NOTIFICATIONS
 		if (timediff > 60) {
-			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "handling notifications");
+			DEBUG("handling notifications");
 		}
 		if (use_notifications == 1) {
 			notification_handle();
 		}
 		#endif
 		if (timediff > ACTIVITY_CHECK_INTERVAL) {
-			check_timeout_and_close(server, pool);
+			check_timeout_and_close(pool);
 		}
 
 		/* open incoming connection if any */
 		len = sizeof(remote);
 		if (((unsigned int)tv.tv_sec - olds) > 60) {
-			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, server, "accepting another client");
+			DEBUG("accepting another client");
 			olds = tv.tv_sec;
 		}
 		client = accept(lsock, (struct sockaddr *) &remote, &len);
@@ -1980,7 +2074,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		} else if (client == -1 && (errno == EINTR)) {
 			continue;
 		} else if (client == -1) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Accepting mod_netconf client connection failed (%s)", strerror(errno));
+			DEBUG("Accepting mod_netconf client connection failed (%s)", strerror(errno));
 			continue;
 		}
 
@@ -1995,9 +2089,9 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 		/* start new thread. It will serve this particular request and then terminate */
 		if ((ret = pthread_create (&ptids[pthread_count], NULL, thread_routine, (void*)arg)) != 0) {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Creating POSIX thread failed: %d\n", ret);
+			DEBUG("Creating POSIX thread failed: %d\n", ret);
 		} else {
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Thread %lu created", ptids[pthread_count]);
+			DEBUG("Thread %lu created", ptids[pthread_count]);
 			pthread_count++;
 			ptids = realloc (ptids, sizeof(pthread_t)*(pthread_count+1));
 			ptids[pthread_count] = 0;
@@ -2006,7 +2100,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		/* check if some thread already terminated, free some resources by joining it */
 		for (i=0; i<pthread_count; i++) {
 			if (pthread_tryjoin_np (ptids[i], (void**)&arg) == 0) {
-				ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Thread %lu joined with retval %p", ptids[i], arg);
+				DEBUG("Thread %lu joined with retval %p", ptids[i], arg);
 				pthread_count--;
 				if (pthread_count > 0) {
 					/* place last Thread ID on the place of joined one */
@@ -2014,38 +2108,40 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 				}
 			}
 		}
-		ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Running %d threads", pthread_count);
+		DEBUG("Running %d threads", pthread_count);
 	}
 
-	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "mod_netconf terminating...");
+	DEBUG("mod_netconf terminating...");
 	/* join all threads */
 	for (i=0; i<pthread_count; i++) {
 		pthread_timedjoin_np (ptids[i], (void**)&arg, &maxtime);
 	}
-	free (ptids);
-
-	close(lsock);
 
 	#ifdef WITH_NOTIFICATIONS
 	notification_close();
 	#endif
 
 	/* close all NETCONF sessions */
-	close_all_nc_sessions(server, pool);
+	close_all_nc_sessions(pool);
 
 	/* destroy rwlock */
 	pthread_rwlock_destroy(&session_lock);
 	pthread_rwlockattr_destroy(&lock_attrs);
 
-	ap_log_error(APLOG_MARK, APLOG_ERR, 0, server, "Exiting from the mod_netconf daemon");
+	DEBUG("Exiting from the mod_netconf daemon");
 
+	free(ptids);
+	close(lsock);
 	exit(APR_SUCCESS);
+	return;
+error_exit:
+	close(lsock);
+	free(ptids);
+	return;
 }
 
 static void *mod_netconf_create_conf(apr_pool_t * pool, server_rec * s)
 {
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "Init netconf module config");
-
 	mod_netconf_cfg *config = apr_pcalloc(pool, sizeof(mod_netconf_cfg));
 	apr_pool_create(&config->pool, pool);
 	config->forkproc = NULL;
@@ -2054,6 +2150,7 @@ static void *mod_netconf_create_conf(apr_pool_t * pool, server_rec * s)
 	return (void *)config;
 }
 
+#ifndef HTTPD_INDEPENDENT
 static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 		  apr_pool_t * plog, server_rec * s)
 {
@@ -2075,7 +2172,7 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 		return (OK);
 	}
 
-	ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "creating mod_netconf daemon");
+	DEBUG("creating mod_netconf daemon");
 	config = ap_get_module_config(s->module_config, &netconf_module);
 
 	if (config && config->forkproc == NULL) {
@@ -2088,13 +2185,13 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 			apr_signal(SIGTERM, signal_handler);
 
 			/* log start of the separated NETCONF communication process */
-			ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s, "mod_netconf daemon started (PID %d)", getpid());
+			DEBUG("mod_netconf daemon started (PID %d)", getpid());
 
 			/* start main loop providing NETCONF communication */
 			forked_proc(config->pool, s);
 
 			/* I never should be here, wtf?!? */
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, s, "mod_netconf daemon unexpectedly stopped");
+			DEBUG("mod_netconf daemon unexpectedly stopped");
 			exit(APR_EGENERAL);
 			break;
 		case APR_INPARENT:
@@ -2102,22 +2199,25 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 			apr_pool_note_subprocess(config->pool, config->forkproc, APR_KILL_AFTER_TIMEOUT);
 			break;
 		default:
-			ap_log_error(APLOG_MARK, APLOG_ERR, 0, s, "apr_proc_fork() failed");
+			DEBUG("apr_proc_fork() failed");
 			break;
 		}
 	} else {
-		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "mod_netconf misses configuration structure");
+		DEBUG("mod_netconf misses configuration structure");
 	}
 
 	return OK;
 }
+#endif
 
 /**
  * Register module hooks
  */
 static void mod_netconf_register_hooks(apr_pool_t * p)
 {
+#ifndef HTTPD_INDEPENDENT
 	ap_hook_post_config(mod_netconf_master_init, NULL, NULL, APR_HOOK_LAST);
+#endif
 }
 
 static const char* cfg_set_socket_path(cmd_parms* cmd, void* cfg, const char* arg)
@@ -2142,3 +2242,16 @@ module AP_MODULE_DECLARE_DATA netconf_module = {
 	mod_netconf_register_hooks	/* register hooks                      */
 };
 
+int main(int argc, char **argv)
+{
+	apr_pool_t *pool;
+	apr_app_initialize(&argc, (char const *const **) &argv, NULL);
+	apr_signal(SIGTERM, signal_handler);
+	apr_signal(SIGINT, signal_handler);
+	apr_pool_create(&pool, NULL);
+	forked_proc(pool, NULL);
+	apr_pool_destroy(pool);
+	apr_terminate();
+	DEBUG("Terminated");
+	return 0;
+}

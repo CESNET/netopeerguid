@@ -34,7 +34,7 @@ HDRS=message_type.h \
      notification_module.h \
      mod_netconf.h
 
-all: module client
+all: module client webgui-backend
 
 module: mod_netconf.c
 	$(APXS) $(LIBS) $(ARCSID) $(CFLAGS) -c mod_netconf.c notification-server.c
@@ -59,7 +59,7 @@ install: $(TARGETS)
 
 .PHONY: clean
 clean:
-	rm -rf .libs *.la *.lo *.slo test-client
+	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
 
 .PHONY: tarball
 tarball: $(SRCS) $(HEADERS)
@@ -85,3 +85,6 @@ rpm: tarball
 .PHONY: distclean
 distclean:
 	rm -rf $(RPMDIR)
+
+webgui-backend: mod_netconf.c notification-server.c mod_netconf.h
+	gcc -Wall -g $(CFLAGS) -DHTTPD_INDEPENDENT  $(RCSID) `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd $(LIBS) -laprutil-1 -o $@ mod_netconf.c notification-server.c

@@ -1978,7 +1978,7 @@ USERMAIL=`git config --get user.email`
 
 
 
-RELEASE=2
+RELEASE=1
 
 LIBS="-lnetconf -ljson"
 

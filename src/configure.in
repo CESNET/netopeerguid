@@ -17,7 +17,7 @@ USERMAIL=`git config --get user.email`
 AC_SUBST(USERNAME)
 AC_SUBST(USERMAIL)
 
-RELEASE=2
+RELEASE=1
 AC_SUBST(RELEASE)
 LIBS="-lnetconf -ljson"
 
