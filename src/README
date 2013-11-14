@@ -155,3 +155,10 @@ key: session (string), value: unique session identifier
 key: from (int64), value: start time in history
 key: to (int64), value: end time
 
+16) validate Validate datastore or url
+key: type (int), value: 19
+key: session (string), value: unique session identifier
+key: target (string), value: running|startup|candidate|url
+Required when target is "url":
+key: url (string), value: URL of datastore to validate
+
