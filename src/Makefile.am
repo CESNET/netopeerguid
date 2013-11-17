@@ -31,7 +31,7 @@ install-exec-local: mod_netconf.so
 	{ mkdir -p "$(httpdmoduledir)"; $(APXS) -i -S LIBEXECDIR="$(httpdmoduledir)" -a mod_netconf.la; }
 
 webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
-	gcc -Wall -g @SAVED_CFLAGS@ -DHTTPD_INDEPENDENT  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd @SAVED_LIBS@ -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
+	gcc -Wall -g $(LIBS) $(CFLAGS) -DHTTPD_INDEPENDENT  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd  -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
 
 clean-local:
 	rm -rf .libs *.la *.lo *.slo test-client webgui-backend

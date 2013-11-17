@@ -30,6 +30,7 @@ make DESTDIR=$RPM_BUILD_ROOT RUN="RPM" install
 #add device module to configuration only when installing, not on update or reinstall.
 #https://fedoraproject.org/wiki/Packaging:Guidelines?rd=Packaging/Guidelines#Running_scriptlets_only_in_certain_situations
 [ -d /var/run/httpd ] || { mkdir -p /var/run/httpd && chown apache:apache /var/run/httpd; }
+chcon system_u:object_r:httpd_modules_t:s0 /etc/httpd/modules/mod_netconf.so
 service httpd restart
 
 %postun
