@@ -199,22 +199,24 @@ void netconf_callback_error_process(const char* tag,
 		const char* ns,
 		const char* sid)
 {
-	if (err_reply != NULL) {
-		json_object_put(err_reply);
-		err_reply = NULL;
+	json_object *array = NULL;
+	if (err_reply == NULL) {
+		err_reply = json_object_new_object();
+		array = json_object_new_array();
+		json_object_object_add(err_reply, "type", json_object_new_int(REPLY_ERROR));
+		json_object_object_add(err_reply, "errors", array);
+		if (message != NULL) {
+			json_object_array_add(array, json_object_new_string(message));
+		}
+		return;
+	} else {
+		array = json_object_object_get(err_reply, "errors");
+		if (array != NULL) {
+			if (message != NULL) {
+				json_object_array_add(array, json_object_new_string(message));
+			}
+		}
 	}
-	err_reply = json_object_new_object();
-	json_object_object_add(err_reply, "type", json_object_new_int(REPLY_ERROR));
-	if (tag) json_object_object_add(err_reply, "error-tag", json_object_new_string(tag));
-	if (type) json_object_object_add(err_reply, "error-type", json_object_new_string(type));
-	if (severity) json_object_object_add(err_reply, "error-severity", json_object_new_string(severity));
-	if (apptag) json_object_object_add(err_reply, "error-app-tag", json_object_new_string(apptag));
-	if (path) json_object_object_add(err_reply, "error-path", json_object_new_string(path));
-	if (message) json_object_object_add(err_reply, "error-message", json_object_new_string(message));
-	if (attribute) json_object_object_add(err_reply, "bad-attribute", json_object_new_string(attribute));
-	if (element) json_object_object_add(err_reply, "bad-element", json_object_new_string(element));
-	if (ns) json_object_object_add(err_reply, "bad-namespace", json_object_new_string(ns));
-	if (sid) json_object_object_add(err_reply, "session-id", json_object_new_string(sid));
 }
 
 /**
