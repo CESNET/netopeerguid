@@ -26,8 +26,8 @@ test-client$(EXEEXT): test-client.c
 #	gcc -std=gnu99 -Wall -g -lwebsockets -DTEST_NOTIFICATION_SERVER -o $@ $<
 
 install-exec-local: mod_netconf.so
-	[ "x$(httpdmoduledir)" != x ] || \
-	$(APXS) -i -a mod_netconf.la && \
+	[ "x$(httpdmoduledir)" == x ] && \
+	$(APXS) -i -a mod_netconf.la || \
 	{ mkdir -p "$(httpdmoduledir)"; $(APXS) -i -S LIBEXECDIR="$(httpdmoduledir)" -a mod_netconf.la; }
 
 webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
