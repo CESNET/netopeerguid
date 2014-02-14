@@ -105,7 +105,12 @@ key: error-option (string), value: stop-on-error|continue-on-error|rollback-on-e
 6) NETCONF <copy-config>
 key: type (int), value: 9
 key: session (string), value: unique session identifier
-key: target (string), value: running|startup|candidate
+key: source (string), value: running|startup|candidate|url
+key: target (string), value: running|startup|candidate|url
+Optional, required when "url" is used:
+key: uri_source (string), required when "source" is "url", value: uri
+key: uri_target (string), required when "target" is "url", value: uri
+
 
 Alternating:
 key: source (string), value: running|startup|candidate

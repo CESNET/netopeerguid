@@ -721,22 +721,34 @@ static char* netconf_get(const char* session_key, const char* filter, json_objec
 	return (data);
 }
 
-static json_object *netconf_copyconfig(const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *url)
+static json_object *netconf_copyconfig(const char* session_key, NC_DATASTORE source, NC_DATASTORE target, const char* config, const char *uri_src, const char *uri_trg)
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
 
 	/* create requests */
-	if ((source == NC_DATASTORE_CONFIG) || (source == NC_DATASTORE_URL)) {
+	if (source == NC_DATASTORE_CONFIG) {
 		if (target == NC_DATASTORE_URL) {
-			rpc = nc_rpc_copyconfig(source, target, config, url);
+			/* config, url */
+			rpc = nc_rpc_copyconfig(source, target, config, uri_trg);
 		} else {
+			/* config, datastore */
 			rpc = nc_rpc_copyconfig(source, target, config);
+		}
+	} else if (source == NC_DATASTORE_URL) {
+		if (target == NC_DATASTORE_URL) {
+			/* url, url */
+			rpc = nc_rpc_copyconfig(source, target, uri_src, uri_trg);
+		} else {
+			/* url, datastore */
+			rpc = nc_rpc_copyconfig(source, target, uri_src);
 		}
 	} else {
 		if (target == NC_DATASTORE_URL) {
-			rpc = nc_rpc_copyconfig(source, target, url);
+			/* datastore, url */
+			rpc = nc_rpc_copyconfig(source, target, uri_trg);
 		} else {
+			/* datastore, datastore */
 			rpc = nc_rpc_copyconfig(source, target);
 		}
 	}
@@ -1244,6 +1256,9 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 	const char *config = NULL;
 	const char *target = NULL;
 	const char *source = NULL;
+	const char *uri_src = NULL;
+	const char *uri_trg = NULL;
+
 	json_object *reply = NULL;
 
 	DEBUG("Request: copy-config (session %s)", session_key);
@@ -1269,15 +1284,28 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 		return create_error("Invalid target repository type requested.");
 	}
 
-	if (source == NULL && config == NULL) {
-		reply = create_error("invalid input parameters - one of source and config is required.");
-	} else {
-		reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, "");
-		if (reply == NULL) {
-			if (err_reply != NULL) {
-				/* use filled err_reply from libnetconf's callback */
-				reply = err_reply;
-			}
+	if (source == NULL || config == NULL) {
+		reply = create_error("invalid input parameters - source and config is required.");
+		return reply;
+	}
+
+	if (ds_type_s == NC_DATASTORE_URL) {
+		uri_src = json_object_get_string(json_object_object_get(request, "uri_source"));
+		if (uri_src == NULL) {
+			uri_src = "";
+		}
+	}
+	if (ds_type_t == NC_DATASTORE_URL) {
+		uri_trg = json_object_get_string(json_object_object_get(request, "uri_target"));
+		if (uri_trg == NULL) {
+			uri_trg = "";
+		}
+	}
+	reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, uri_src, uri_trg);
+	if (reply == NULL) {
+		if (err_reply != NULL) {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
 		}
 	}
 	return reply;
