@@ -1300,13 +1300,13 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 	}
 
 	if (ds_type_s == NC_DATASTORE_URL) {
-		uri_src = json_object_get_string(json_object_object_get(request, "uri_source"));
+		uri_src = json_object_get_string(json_object_object_get(request, "uri-source"));
 		if (uri_src == NULL) {
 			uri_src = "";
 		}
 	}
 	if (ds_type_t == NC_DATASTORE_URL) {
-		uri_trg = json_object_get_string(json_object_object_get(request, "uri_target"));
+		uri_trg = json_object_get_string(json_object_object_get(request, "uri-target"));
 		if (uri_trg == NULL) {
 			uri_trg = "";
 		}
