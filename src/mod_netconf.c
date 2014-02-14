@@ -763,14 +763,13 @@ static json_object *netconf_copyconfig(const char* session_key, NC_DATASTORE sou
 	return res;
 }
 
-static json_object *netconf_editconfig(const char* session_key, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config)
+static json_object *netconf_editconfig(const char* session_key, NC_DATASTORE source, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop, NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char* config_or_url)
 {
 	nc_rpc* rpc;
 	json_object *res = NULL;
 
 	/* create requests */
-	/* TODO source NC_DATASTORE_CONFIG / NC_DATASTORE_URL  */
-	rpc = nc_rpc_editconfig(target, NC_DATASTORE_CONFIG, defop, erropt, testopt, config);
+	rpc = nc_rpc_editconfig(target, source, defop, erropt, testopt, config_or_url);
 	if (rpc == NULL) {
 		DEBUG("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
@@ -984,6 +983,8 @@ NC_DATASTORE parse_datastore(const char *ds)
 		return NC_DATASTORE_CANDIDATE;
 	} else if (strcmp(ds, "url") == 0) {
 		return NC_DATASTORE_URL;
+	} else if (strcmp(ds, "config") == 0) {
+		return NC_DATASTORE_CONFIG;
 	}
 	return -1;
 }
@@ -1229,17 +1230,26 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 	}
 	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
 		ds_type_s = parse_datastore(source);
+	} else {
+		/* source is optional, default value is config */
+		ds_type_s = NC_DATASTORE_CONFIG;
 	}
 	if (ds_type_t == -1) {
 		return create_error("Invalid target repository type requested.");
 	}
-
-	config = json_object_get_string(json_object_object_get(request, "config"));
-	if (config == NULL) {
-		return create_error("Invalid config data parameter.");
+	if (ds_type_s == NC_DATASTORE_CONFIG) {
+		config = json_object_get_string(json_object_object_get(request, "config"));
+		if (config == NULL) {
+			return create_error("Invalid config data parameter.");
+		}
+	} else if (ds_type_s == NC_DATASTORE_URL){
+		config = json_object_get_string(json_object_object_get(request, "uri-source"));
+		if (config == NULL) {
+			config = "";
+		}
 	}
 
-	reply = netconf_editconfig(session_key, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config);
+	reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config);
 	if (reply == NULL) {
 		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */
