@@ -989,6 +989,20 @@ NC_DATASTORE parse_datastore(const char *ds)
 	return -1;
 }
 
+NC_EDIT_TESTOPT_TYPE parse_testopt(const char *t)
+{
+	if (strcmp(t, "notset") == 0) {
+		return NC_EDIT_TESTOPT_NOTSET;
+	} else if (strcmp(t, "testset") == 0) {
+		return NC_EDIT_TESTOPT_TESTSET;
+	} else if (strcmp(t, "set") == 0) {
+		return NC_EDIT_TESTOPT_SET;
+	} else if (strcmp(t, "test") == 0) {
+		return NC_EDIT_TESTOPT_TEST;
+	}
+	return NC_EDIT_TESTOPT_ERROR;
+}
+
 json_object *create_error(const char *errmess)
 {
 	json_object *reply = json_object_new_object();
@@ -1185,11 +1199,13 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 	NC_DATASTORE ds_type_t = -1;
 	NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
 	NC_EDIT_ERROPT_TYPE erropt_type = 0;
+	NC_EDIT_TESTOPT_TYPE testopt_type = NC_EDIT_TESTOPT_TESTSET;
 	const char *defop = NULL;
 	const char *erropt = NULL;
 	const char *config = NULL;
 	const char *source = NULL;
 	const char *target = NULL;
+	const char *testopt = NULL;
 	json_object *reply = NULL;
 
 	DEBUG("Request: edit-config (session %s)", session_key);
@@ -1249,7 +1265,14 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 		}
 	}
 
-	reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, NC_EDIT_TESTOPT_TESTSET, config);
+	testopt = json_object_get_string(json_object_object_get(request, "test-option"));
+	if (testopt != NULL) {
+		testopt_type = parse_testopt(testopt);
+	} else {
+		testopt_type = NC_EDIT_TESTOPT_TESTSET;
+	}
+
+	reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, testopt_type, config);
 	if (reply == NULL) {
 		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */

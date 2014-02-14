@@ -103,6 +103,7 @@ key: source (string), value: config|url, default value: config
 key: default-operation (string), value: merge|replace|none
 key: error-option (string), value: stop-on-error|continue-on-error|rollback-on-error 
 key: uri-source (string), required when "source" is "url", value: uri
+key: test-option (string), value: notset|testset|set|test, default value: testset
 
 6) NETCONF <copy-config>
 key: type (int), value: 9
