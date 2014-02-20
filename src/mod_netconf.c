@@ -1317,7 +1317,8 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 		return create_error("Invalid target repository type requested.");
 	}
 
-	if (source == NULL || config == NULL) {
+	/* source can be missing when config is given */
+	if (source == NULL && config == NULL) {
 		reply = create_error("invalid input parameters - source and config is required.");
 		return reply;
 	}
