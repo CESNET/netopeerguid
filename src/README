@@ -13,7 +13,7 @@ LoadModule netconf_module                 /usr/lib64/apache2/mod_netconf.so
 
 - For testing, you can run test-client
   - run under the same user as Apache, or change access rights of the
-    communication socket (/tmp/pconn.sock) to allow writing.
+    communication socket (/tmp/mod_netconf.sock) to allow writing.
 
     
 mod_netconf Message Format
@@ -64,7 +64,7 @@ key: capabilities (array of strings), value: list of supported capabilities
 
 Requests
 ~~~~~~~~
-1) Request to create NETCONF session
+1) Request to create NETCONF session (connect)
 key: type (int), value: 4
 key: user (string)
 key: pass (string), value: plain text password
@@ -73,7 +73,7 @@ Optional:
 key: host (string), "localhost" if not specified
 key: port (string), "830" if not specified
 
-2) Request to close NETCONF session
+2) Request to close NETCONF session (disconnect)
 key: type (int), value: 5
 key: session (string), value: unique session identifier
 
