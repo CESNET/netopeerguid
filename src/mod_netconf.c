@@ -1665,12 +1665,16 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 
 	DEBUG("Request: validate datastore");
 	if ((reply = netconf_op(session_key, rpc, NULL)) == NULL) {
-		reply = json_object_new_object();
-		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		if (err_reply == NULL) {
+			DEBUG("Request: validation ok.");
+			reply = create_ok();
+		} else {
+			/* use filled err_reply from libnetconf's callback */
+			reply = err_reply;
+		}
 	}
 	nc_rpc_free (rpc);
 
-	DEBUG("Request: validate datastore");
 	return reply;
 }
 
