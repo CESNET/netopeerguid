@@ -13,13 +13,6 @@ AC_SUBST(USERMAIL)
 
 RELEASE=1
 AC_SUBST(RELEASE)
-LIBS="-lnetconf -ljson"
-
-if test "x$webguidir" == x; then
-	webguidir="/var/www"
-fi
-AC_ARG_VAR(webguidir, [Installation directory for webgui [/var/www]])
-AC_SUBST(webguidir)
 
 AC_ARG_VAR(httpdmoduledir, [Installation directory for Apache module, leave unset to use Apache default.])
 AC_SUBST(httpdmoduledir)
@@ -29,12 +22,6 @@ if test "x$httpdconfddir" == x; then
 fi
 AC_ARG_VAR(httpdconfddir, [Directory for Apache configuration files [/etc/httpd/conf.d]])
 AC_SUBST(httpdconfddir)
-
-if test "x$webguiname" == x; then
-	webguiname="netconfwebgui"
-fi
-AC_ARG_VAR(webguiname, [Installation directory name for webgui [netconfwebgui]])
-AC_SUBST(webguiname)
 
 # Checks for programs.
 AC_ARG_WITH(apxs, AC_HELP_STRING([--with-apxs=NAME],[name of the apxs executable [[apxs]]]), [APXS="$with_apxs"])
@@ -58,18 +45,6 @@ else
 AC_MSG_ERROR([apachectl was not found])
 fi
 
-AC_PATH_PROGS(PHP, php, [no], [$PATH])
-if test "x$PHP" != xno; then
-	for i in dom json xml pdo intl sysvsem; do
-		AC_MSG_CHECKING([for php module $i])
-		php -m | grep "$i" > /dev/null && AC_MSG_RESULT([yes]) || AC_MSG_ERROR([not found])
-	done
-else
-AC_MSG_ERROR([php was not found])
-fi
-AC_SUBST(PHP)
-
-
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild, [""])
 RPM_RELEASE=1
@@ -80,32 +55,18 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 # save clean LIBS and CFLAGS
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
-#AC_CHECK_LIB([apr-1], [apr_hash_make])
-#AC_CHECK_LIB([aprutil-1], [apr_sha1_init])
-#AC_CHECK_LIB([netconf], [nc_session_connect])
-#AC_CHECK_LIB([json], [json_object_new_object])
 PKG_CHECK_MODULES([json], [json])
 PKG_CHECK_MODULES([websockets], [libwebsockets])
 PKG_CHECK_MODULES([apr], [apr-1])
 PKG_CHECK_MODULES([aprutil], [apr-util-1])
 PKG_CHECK_MODULES([netconf], [libnetconf])
 PKG_CHECK_MODULES([xml], [libxml-2.0])
-#$apr_CFLAGS $aprutil_CFLAGS 
-#$apr_LIBS $aprutil_LIBS 
 CFLAGS="$json_CFLAGS $websockets_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
 LIBS="$json_LIBS $websockets_LIBS $netconf_LIBS $xml_LIBS"
 CPPFLAGS="$xml_CPPFLAGS"
 
-AX_PTHREAD([LIBS="$PTHREAD_LIBS $LIBS"
-	    CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
-	    CC="$PTHREAD_CC"],
-	    [AC_MSG_ERROR([pthread not found])]
-	   )
-SAVED_LIBS=$LIBS
-SAVED_CFLAGS=$CFLAGS
-
-AC_SUBST(SAVED_LIBS)
-AC_SUBST(SAVED_CFLAGS)
+AX_PTHREAD([CC="$PTHREAD_CC"],
+	    [AC_MSG_ERROR([pthread not found])])
 
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],
@@ -129,6 +90,7 @@ AC_FUNC_REALLOC
 AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 
 AC_CONFIG_FILES([Makefile
+                conf.d/Makefile
 		src/Makefile
 		])
 AC_OUTPUT

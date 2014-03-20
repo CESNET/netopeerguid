@@ -1122,21 +1122,15 @@ json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *s
 json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const char *session_key)
 {
 	NC_DATASTORE ds_type_s = -1;
-	NC_DATASTORE ds_type_t = -1;
 	const char *filter = NULL;
 	char *data = NULL;
 	const char *source = NULL;
-	const char *target = NULL;
 	json_object *reply = NULL;
 
 	DEBUG("Request: get-config (session %s)", session_key);
 
 	filter = json_object_get_string(json_object_object_get(request, "filter"));
 
-	/* get parameters */
-	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
-		ds_type_t = parse_datastore(target);
-	}
 	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
 		ds_type_s = parse_datastore(source);
 	}
@@ -1689,10 +1683,8 @@ void * thread_routine (void * arg)
 	const char *msgtext;
 	const char *session_key;
 	const char *target = NULL;
-	const char *source = NULL;
 	const char *url = NULL;
 	NC_DATASTORE ds_type_t = -1;
-	NC_DATASTORE ds_type_s = -1;
 	char *chunked_out_msg = NULL;
 	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
 	//server_rec * server = ((struct pass_to_thread*)arg)->server;
@@ -1795,9 +1787,6 @@ void * thread_routine (void * arg)
 				/* get parameters */
 				if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
 					ds_type_t = parse_datastore(target);
-				}
-				if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
-					ds_type_s = parse_datastore(source);
 				}
 
 				if (ds_type_t == -1) {
