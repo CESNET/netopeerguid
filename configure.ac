@@ -44,6 +44,8 @@ else
 AC_MSG_ERROR([Apxs for Apache module compilation and installation was not found.])
 fi
 
+AM_CONDITIONAL([MANUAL_CONFD], [test -n "$with_apxs" ])
+
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
 AC_CHECK_PROG(HTTPD, [httpd], [yes], [""])

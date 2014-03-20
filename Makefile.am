@@ -2,6 +2,9 @@ ACLOCAL_AMFLAGS = -I m4
 
 
 SUBDIRS=src
+if MANUAL_CONFD
+SUBDIRS+=conf.d
+endif
 
 RPMDIR = RPMBUILD
 
