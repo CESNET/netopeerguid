@@ -1428,10 +1428,9 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 	struct session_with_mutex * locked_session = NULL;
 	json_object *reply = NULL;
 	DEBUG("Request: get info about session %s", session_key);
-	return create_ok();
 
 	DEBUG("LOCK wrlock %s", __func__);
-	if (pthread_rwlock_rdlock(&session_lock) != 0) {
+	if (pthread_rwlock_wrlock(&session_lock) != 0) {
 		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		return NULL;
 	}
@@ -1440,10 +1439,6 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 	if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
 		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
-		DEBUG("UNLOCK wrlock %s", __func__);
-		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-		}
 		DEBUG("creating temporal NC session.");
 		temp_session = nc_session_connect_channel(locked_session->session, NULL);
 		if (temp_session != NULL) {
@@ -1457,6 +1452,10 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 		}
 		DEBUG("UNLOCK mutex %s", __func__);
 		pthread_mutex_unlock(&locked_session->lock);
+		DEBUG("UNLOCK wrlock %s", __func__);
+		if (pthread_rwlock_unlock(&session_lock) != 0) {
+			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		}
 	} else {
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
