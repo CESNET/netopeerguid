@@ -503,7 +503,7 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 						free(*data);
 						(*data) = NULL;
 					}
-					return create_error(nc_reply_get_errormsg(reply));
+					return create_error("Unknown type of NETCONF reply.");
 			}
 			break;
 		default:
