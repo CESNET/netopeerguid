@@ -312,9 +312,11 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 				nc_session_get_id(session));
 
 		/** \todo allocate from apr_pool */
-		if ((locked_session = malloc (sizeof (struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
+		if ((locked_session = calloc(1, sizeof(struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
 			nc_session_free(session);
-			free (locked_session);
+			session = NULL;
+			free(locked_session);
+			locked_session = NULL;
 			DEBUG("Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
@@ -372,7 +374,10 @@ static int close_and_free_session(struct session_with_mutex *locked_session)
 	}
 	locked_session->ntfc_subscribed = 0;
 	locked_session->closed = 1;
-	nc_session_free(locked_session->session);
+	if (locked_session->session != NULL) {
+		nc_session_free(locked_session->session);
+		locked_session->session = NULL;
+	}
 	DEBUG("session closed.");
 	DEBUG("unlock private lock.");
 	DEBUG("UNLOCK mutex %s", __func__);
@@ -1445,6 +1450,7 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 			prepare_status_message(locked_session, temp_session);
 			DEBUG("closing temporal NC session.");
 			nc_session_free(temp_session);
+			temp_session = NULL;
 		} else {
 			DEBUG("Reload hello failed due to channel establishment");
 			reply = create_error("Reload was unsuccessful, connection failed.");
@@ -1602,6 +1608,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 			pthread_mutex_unlock(&ntf_history_lock);
 			DEBUG("closing temporal NC session.");
 			nc_session_free(temp_session);
+			temp_session = NULL;
 		} else {
 			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&locked_session->lock);
