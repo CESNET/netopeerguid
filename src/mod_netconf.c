@@ -242,9 +242,10 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 		if (j_old_sid != NULL) {
 			old_sid = strdup(j_old_sid);
 		}
+		json_object_put(s->hello_message);
 		s->hello_message = NULL;
 	}
-	s->hello_message = json_object_new_object();
+	s->hello_message = json_object_get(json_object_new_object());
 	if (session != NULL) {
 		if (old_sid != NULL) {
 			/* use previous sid */
