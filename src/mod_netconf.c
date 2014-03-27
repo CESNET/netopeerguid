@@ -50,6 +50,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/fcntl.h>
+#include <pwd.h>
+#include <grp.h>
 #include <pthread.h>
 #include <ctype.h>
 
@@ -67,6 +69,8 @@
 
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>
+
+#include "../config.h"
 
 #ifdef WITH_NOTIFICATIONS
 #include "notification_module.h"
@@ -2121,10 +2125,42 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	maxtime.tv_sec = 5;
 	maxtime.tv_nsec = 0;
 
-	#ifndef HTTPD_INDEPENDENT
+#ifdef HAVE_UNIXD_SETUP_CHILD
 	/* change uid and gid of process for security reasons */
 	unixd_setup_child();
-	#endif
+#else
+# ifdef SU_GROUP
+	if (strlen(SU_GROUP) > 0) {
+		struct group *g = getgrnam(SU_GROUP);
+		if (g == NULL) {
+			DEBUG("GID (%s) was not found.", SU_GROUP);
+			return;
+		}
+		if (setgid(g->gr_gid) != 0) {
+
+			DEBUG("Switching to %s GID failed. (%s)", SU_GROUP, strerror(errno));
+			return;
+		}
+	}
+# else
+	DEBUG("no SU_GROUP");
+# endif
+# ifdef SU_USER
+	if (strlen(SU_USER) > 0) {
+		struct passwd *p = getpwnam(SU_USER);
+		if (p == NULL) {
+			DEBUG("UID (%s) was not found.", SU_USER);
+			return;
+		}
+		if (setuid(p->pw_uid) != 0) {
+			DEBUG("Switching to UID %s failed. (%s)", SU_USER, strerror(errno));
+			return;
+		}
+	}
+# else
+	DEBUG("no SU_USER");
+# endif
+#endif
 
 	if (server != NULL) {
 		cfg = ap_get_module_config(server->module_config, &netconf_module);
@@ -2137,6 +2173,9 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		sockname = SOCKET_FILENAME;
 	}
 
+	/* try to remove if exists */
+	unlink(sockname);
+
 	/* create listening UNIX socket to accept incoming connections */
 	if ((lsock = socket(PF_UNIX, SOCK_STREAM, 0)) == -1) {
 		DEBUG("Creating socket failed (%s)", strerror(errno));
@@ -2145,7 +2184,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	local.sun_family = AF_UNIX;
 	strncpy(local.sun_path, sockname, sizeof(local.sun_path));
-	unlink(local.sun_path);
 	len = offsetof(struct sockaddr_un, sun_path) + strlen(local.sun_path);
 
 	if (bind(lsock, (struct sockaddr *) &local, len) == -1) {
@@ -2162,6 +2200,24 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		goto error_exit;
 	}
 	chmod(sockname, S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
+
+	uid_t user = -1;
+	if (strlen(CHOWN_USER) > 0) {
+		struct passwd *p = getpwnam(CHOWN_USER);
+		if (p != NULL) {
+			user = p->pw_uid;
+		}
+	}
+	gid_t group = -1;
+	if (strlen(CHOWN_GROUP) > 0) {
+		struct group *g = getgrnam(CHOWN_GROUP);
+		if (g != NULL) {
+			group = g->gr_gid;
+		}
+	}
+	if (chown(sockname, user, group) == -1) {
+		DEBUG("Chown on socket file failed (%s).", strerror(errno));
+	}
 
 	/* prepare internal lists */
 	netconf_sessions_list = apr_hash_make(pool);

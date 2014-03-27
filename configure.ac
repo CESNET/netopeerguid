@@ -14,6 +14,30 @@ AC_SUBST(USERMAIL)
 RELEASE=1
 AC_SUBST(RELEASE)
 
+AC_ARG_VAR(SU_USER, [Change UID of process according to username.])
+if test "x$SU_USER" == x; then
+  SU_USER=""
+fi
+AC_SUBST([SU_USER])
+
+AC_ARG_VAR(SU_GROUP, [Change GID of process according to groupname.])
+if test "x$SU_GROUP" == x; then
+  SU_GROUP=""
+fi
+AC_SUBST([SU_GROUP])
+
+AC_ARG_VAR(CHOWN_USER, [Use chown (user) on socket file.])
+if test "x$CHOWN_USER" == x; then
+  CHOWN_USER=""
+fi
+AC_SUBST([CHOWN_USER])
+
+AC_ARG_VAR(CHOWN_GROUP, [Use chown (group) on socket file.])
+if test "x$CHOWN_GROUP" == x; then
+  CHOWN_GROUP=""
+fi
+AC_SUBST([CHOWN_GROUP])
+
 AC_ARG_VAR(httpdmoduledir, [Installation directory for Apache module, leave unset to use Apache default.])
 AC_SUBST(httpdmoduledir)
 
@@ -90,6 +114,7 @@ AC_FUNC_REALLOC
 AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 
 AC_CONFIG_FILES([Makefile
+                config.h
                 conf.d/Makefile
 		src/Makefile
 		])
@@ -111,11 +136,6 @@ echo "  asxs.................: $ASXS"
 echo "  LIBS.................: $LIBS"
 echo "  CFLAGS...............: $CFLAGS"
 echo
-echo "Components"
-echo "  mod_netconf..........: $with_modnetconf"
-echo "  webgui frontend......: $with_webgui"
-echo "  pyang plugins........: $with_pyang"
-echo
 echo "Installation...........: make install (as root if needed, with 'su' or 'sudo')"
 echo "  prefix...............: $prefix"
 echo "  python module dir....: $pyplugindir"
@@ -124,5 +144,9 @@ echo "  webgui name..........: $webguiname"
 echo "  httpdmoduledir.......: $(test -z "$httpdmoduledir" && echo "Apache default path" || echo "$httpdmoduledir")"
 echo "  httpdconfddir........: $(test -z "$httpdconfddir" && echo "Apache default path" || echo "$httpdconfddir")"
 echo "  run composer install.: $composerinstall"
+echo "Su user for process:...............: $SU_USER"
+echo "Su group for process:..............: $SU_GROUP"
+echo "Chown user for sock file:...............: $CHOWN_USER"
+echo "Chown group for sock file:..............: $CHOWN_GROUP"
 echo
 
