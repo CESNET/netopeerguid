@@ -116,6 +116,30 @@ apr_hash_t *netconf_sessions_list = NULL;
 
 static pthread_key_t notif_history_key;
 
+static pthread_key_t err_reply_key;
+
+#define GETSPEC_ERR_REPLY json_object *err_reply = *((json_object **) pthread_getspecific(err_reply_key));
+
+#define CHECK_ERR_SET_REPLY \
+if (reply == NULL) { \
+	GETSPEC_ERR_REPLY \
+	if (err_reply != NULL) { \
+		/* use filled err_reply from libnetconf's callback */ \
+		reply = err_reply; \
+	} \
+}
+
+#define CHECK_ERR_SET_REPLY_ERR(errmsg) \
+if (reply == NULL) { \
+	GETSPEC_ERR_REPLY \
+	if (err_reply == NULL) { \
+		reply = create_error(errmsg); \
+	} else { \
+		/* use filled err_reply from libnetconf's callback */ \
+		reply = err_reply; \
+	} \
+}
+
 volatile int isterminated = 0;
 
 static char* password;
@@ -189,7 +213,6 @@ void netconf_callback_sshauth_interactive (const char* name,
 	return;
 }
 
-static json_object *err_reply = NULL;
 void netconf_callback_error_process(const char* tag,
 		const char* type,
 		const char* severity,
@@ -201,8 +224,12 @@ void netconf_callback_error_process(const char* tag,
 		const char* ns,
 		const char* sid)
 {
+	json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
+	json_object *err_reply = *err_reply_p;
+
 	json_object *array = NULL;
 	if (err_reply == NULL) {
+		DEBUG("error calback: empty error list");
 		pthread_mutex_lock(&json_lock);
 		err_reply = json_object_new_object();
 		array = json_object_new_array();
@@ -212,8 +239,9 @@ void netconf_callback_error_process(const char* tag,
 			json_object_array_add(array, json_object_new_string(message));
 		}
 		pthread_mutex_unlock(&json_lock);
-		return;
+		(*err_reply_p) = err_reply;
 	} else {
+		DEBUG("error calback: nonempty error list");
 		pthread_mutex_lock(&json_lock);
 		array = json_object_object_get(err_reply, "errors");
 		if (array != NULL) {
@@ -223,6 +251,7 @@ void netconf_callback_error_process(const char* tag,
 		}
 		pthread_mutex_unlock(&json_lock);
 	}
+	pthread_setspecific(err_reply_key, err_reply_p);
 	return;
 }
 
@@ -1093,6 +1122,8 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 		nc_cpblts_free(cpblts);
 	}
 
+	GETSPEC_ERR_REPLY
+
 	pthread_mutex_lock(&json_lock);
 	if (session_key_hash == NULL) {
 		/* negative reply */
@@ -1131,14 +1162,7 @@ json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *s
 	pthread_mutex_unlock(&json_lock);
 
 	if ((data = netconf_get(session_key, filter, &reply)) == NULL) {
-		if (reply == NULL) {
-			if (err_reply == NULL) {
-				reply = create_error("Get information failed.");
-			} else {
-				/* use filled err_reply from libnetconf's callback */
-				reply = err_reply;
-			}
-		}
+		CHECK_ERR_SET_REPLY_ERR("Get information failed.")
 	} else {
 		reply = create_data(data);
 		free(data);
@@ -1168,14 +1192,7 @@ json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const c
 	}
 
 	if ((data = netconf_getconfig(session_key, ds_type_s, filter, &reply)) == NULL) {
-		if (reply == NULL) {
-			if (err_reply == NULL) {
-				reply = create_error("Get configuration operation failed.");
-			} else {
-				/* use filled err_reply from libnetconf's callback */
-				reply = err_reply;
-			}
-		}
+		CHECK_ERR_SET_REPLY_ERR("Get configuration operation failed.")
 	} else {
 		reply = create_data(data);
 		free(data);
@@ -1204,14 +1221,7 @@ json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const c
 
 	DEBUG("get-schema(version: %s, format: %s)", version, format);
 	if ((data = netconf_getschema(session_key, identifier, version, format, &reply)) == NULL) {
-		if (reply == NULL) {
-			if (err_reply == NULL) {
-				reply = create_error("Get models operation failed.");
-			} else {
-				/* use filled err_reply from libnetconf's callback */
-				reply = err_reply;
-			}
-		}
+		CHECK_ERR_SET_REPLY_ERR("Get models operation failed.")
 	} else {
 		reply = create_data(data);
 		free(data);
@@ -1301,12 +1311,9 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 	}
 
 	reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, testopt_type, config);
-	if (reply == NULL) {
-		if (err_reply != NULL) {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
-		}
-	}
+
+	CHECK_ERR_SET_REPLY
+
 	return reply;
 }
 
@@ -1367,12 +1374,9 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 		}
 	}
 	reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, uri_src, uri_trg);
-	if (reply == NULL) {
-		if (err_reply != NULL) {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
-		}
-	}
+
+	CHECK_ERR_SET_REPLY
+
 	return reply;
 }
 
@@ -1395,6 +1399,7 @@ json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const cha
 	/* TODO */
 	reply = netconf_generic(session_key, config, &data);
 	if (reply == NULL) {
+		GETSPEC_ERR_REPLY
 		if (err_reply != NULL) {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
@@ -1419,17 +1424,9 @@ json_object *handle_op_disconnect(apr_pool_t *pool, json_object *request, const 
 	DEBUG("Request: Disconnect session %s", session_key);
 
 	if (netconf_close(session_key, &reply) != EXIT_SUCCESS) {
-		if (reply == NULL) {
-			if (err_reply == NULL) {
-				reply = create_error("Get configuration information from device failed.");
-			} else {
-				/* use filled err_reply from libnetconf's callback */
-				reply = err_reply;
-			}
-		}
+		CHECK_ERR_SET_REPLY_ERR("Get configuration information from device failed.")
 	} else {
-		reply = json_object_new_object();
-		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+		reply = create_ok();
 	}
 	return reply;
 }
@@ -1450,12 +1447,9 @@ json_object *handle_op_kill(apr_pool_t *pool, json_object *request, const char *
 	}
 
 	reply = netconf_killsession(session_key, sid);
-	if (reply == NULL) {
-		if (err_reply != NULL) {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
-		}
-	}
+
+	CHECK_ERR_SET_REPLY
+
 	return reply;
 }
 
@@ -1714,12 +1708,12 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 
 	DEBUG("Request: validate datastore");
 	if ((reply = netconf_op(session_key, rpc, NULL)) == NULL) {
-		if (err_reply == NULL) {
+
+		CHECK_ERR_SET_REPLY
+
+		if (reply == NULL) {
 			DEBUG("Request: validation ok.");
 			reply = create_ok();
-		} else {
-			/* use filled err_reply from libnetconf's callback */
-			reply = err_reply;
 		}
 	}
 	nc_rpc_free (rpc);
@@ -1747,6 +1741,15 @@ void * thread_routine (void * arg)
 
 	char *buffer = NULL;
 
+	/* init thread specific err_reply memory */
+	json_object **err_reply = calloc(1, sizeof(json_object **));
+	if (err_reply == NULL) {
+		DEBUG("Allocation of err_reply storage failed!");
+		isterminated = 1;
+	}
+	if (pthread_setspecific(err_reply_key, err_reply) != 0) {
+		DEBUG("notif_history: cannot set thread-specific hash value.");
+	}
 	while (!isterminated) {
 		fds.fd = client;
 		fds.events = POLLIN;
@@ -1817,7 +1820,7 @@ void * thread_routine (void * arg)
 			}
 
 			/* null global JSON error-reply */
-			err_reply = NULL;
+			(*err_reply) = NULL;
 
 			/* prepare reply envelope */
 			if (reply != NULL) {
@@ -1884,7 +1887,7 @@ void * thread_routine (void * arg)
 				}
 
 				if (reply == NULL) {
-					if (err_reply == NULL) {
+					if (*err_reply == NULL) {
 						/** \todo more clever error message wanted */
 						pthread_mutex_lock(&json_lock);
 						reply = json_object_new_object();
@@ -1892,7 +1895,7 @@ void * thread_routine (void * arg)
 						pthread_mutex_unlock(&json_lock);
 					} else {
 						/* use filled err_reply from libnetconf's callback */
-						reply = err_reply;
+						reply = *err_reply;
 					}
 				}
 				break;
@@ -1951,19 +1954,35 @@ void * thread_routine (void * arg)
 					free(buffer);
 					buffer = NULL;
 				}
-				if (err_reply != NULL) {
-					json_object_put(err_reply);
-					err_reply = NULL;
+				if ((err_reply != NULL) && (*err_reply != NULL)) {
+					json_object_put(*err_reply);
+					*err_reply = NULL;
 				}
 				pthread_mutex_unlock(&json_lock);
 			} else {
 				pthread_mutex_unlock(&json_lock);
 				DEBUG("Reply is NULL, shouldn't be...");
+				if (*err_reply == NULL) {
+					DEBUG("No error was set - really strange situation");
+				} else {
+					DEBUG("Error was set but it was not sent.");
+				}
 				continue;
 			}
 		}
 	}
 	free (arg);
+
+	err_reply = (json_object **) pthread_getspecific(err_reply_key);
+	if (err_reply != NULL) {
+		if (*err_reply != NULL) {
+			pthread_mutex_lock(&json_lock);
+			json_object_put(*err_reply);
+			pthread_mutex_unlock(&json_lock);
+		}
+		free(err_reply);
+		err_reply = NULL;
+	}
 
 	return retval;
 }
@@ -2176,6 +2195,10 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	DEBUG("init of notif_history_key.");
 	if (pthread_key_create(&notif_history_key, NULL) != 0) {
 		DEBUG("init of notif_history_key failed");
+	}
+	DEBUG("init of err_reply_key.");
+	if (pthread_key_create(&err_reply_key, NULL) != 0) {
+		DEBUG("init of err_reply_key failed");
 	}
 
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
