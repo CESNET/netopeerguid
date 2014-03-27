@@ -288,6 +288,7 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 			/* use previous sid */
 			json_object_object_add(s->hello_message, "sid", json_object_new_string(old_sid));
 			free(old_sid);
+			old_sid = NULL;
 		} else {
 			/* we don't have old sid */
 			json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
