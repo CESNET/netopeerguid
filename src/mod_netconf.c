@@ -110,6 +110,8 @@ module AP_MODULE_DECLARE_DATA netconf_module;
 pthread_rwlock_t session_lock; /**< mutex protecting netconf_sessions_list from multiple access errors */
 pthread_mutex_t ntf_history_lock; /**< mutex protecting notification history list */
 pthread_mutex_t ntf_hist_clbc_mutex; /**< mutex protecting notification history list */
+pthread_mutex_t json_lock; /**< mutex for protecting json-c calls */
+
 apr_hash_t *netconf_sessions_list = NULL;
 
 static pthread_key_t notif_history_key;
@@ -201,6 +203,7 @@ void netconf_callback_error_process(const char* tag,
 {
 	json_object *array = NULL;
 	if (err_reply == NULL) {
+		pthread_mutex_lock(&json_lock);
 		err_reply = json_object_new_object();
 		array = json_object_new_array();
 		json_object_object_add(err_reply, "type", json_object_new_int(REPLY_ERROR));
@@ -208,15 +211,19 @@ void netconf_callback_error_process(const char* tag,
 		if (message != NULL) {
 			json_object_array_add(array, json_object_new_string(message));
 		}
+		pthread_mutex_unlock(&json_lock);
 		return;
 	} else {
+		pthread_mutex_lock(&json_lock);
 		array = json_object_object_get(err_reply, "errors");
 		if (array != NULL) {
 			if (message != NULL) {
 				json_object_array_add(array, json_object_new_string(message));
 			}
 		}
+		pthread_mutex_unlock(&json_lock);
 	}
+	return;
 }
 
 /**
@@ -235,6 +242,7 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 		return;
 	}
 
+	pthread_mutex_lock(&json_lock);
 	if (s->hello_message != NULL) {
 		DEBUG("clean previous hello message");
 		//json_object_put(s->hello_message);
@@ -275,6 +283,7 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 		json_object_object_add(s->hello_message, "error-message", json_object_new_string("Invalid session identifier."));
 	}
 	DEBUG("Status info from hello message prepared");
+	pthread_mutex_unlock(&json_lock);
 
 }
 
@@ -1011,28 +1020,34 @@ NC_EDIT_TESTOPT_TYPE parse_testopt(const char *t)
 
 json_object *create_error(const char *errmess)
 {
+	pthread_mutex_lock(&json_lock);
 	json_object *reply = json_object_new_object();
 	json_object *array = json_object_new_array();
 	json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 	json_object_array_add(array, json_object_new_string(errmess));
 	json_object_object_add(reply, "errors", array);
+	pthread_mutex_unlock(&json_lock);
 	return reply;
 
 }
 
 json_object *create_data(const char *data)
 {
+	pthread_mutex_lock(&json_lock);
 	json_object *reply = json_object_new_object();
 	json_object_object_add(reply, "type", json_object_new_int(REPLY_DATA));
 	json_object_object_add(reply, "data", json_object_new_string(data));
+	pthread_mutex_unlock(&json_lock);
 	return reply;
 }
 
 json_object *create_ok()
 {
+	pthread_mutex_lock(&json_lock);
 	json_object *reply = json_object_new_object();
 	reply = json_object_new_object();
 	json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+	pthread_mutex_unlock(&json_lock);
 	return reply;
 }
 
@@ -1049,6 +1064,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	unsigned int len, i;
 
 	DEBUG("Request: Connect");
+	pthread_mutex_lock(&json_lock);
 	host = json_object_get_string(json_object_object_get((json_object *) request, "host"));
 	port = json_object_get_string(json_object_object_get((json_object *) request, "port"));
 	user = json_object_get_string(json_object_object_get((json_object *) request, "user"));
@@ -1063,6 +1079,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	} else {
 		DEBUG("no capabilities specified");
 	}
+	pthread_mutex_unlock(&json_lock);
 
 	DEBUG("host: %s, port: %s, user: %s", host, port, user);
 	if ((host == NULL) || (user == NULL)) {
@@ -1076,6 +1093,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 		nc_cpblts_free(cpblts);
 	}
 
+	pthread_mutex_lock(&json_lock);
 	if (session_key_hash == NULL) {
 		/* negative reply */
 		if (err_reply == NULL) {
@@ -1096,6 +1114,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 
 		free(session_key_hash);
 	}
+	pthread_mutex_unlock(&json_lock);
 	return reply;
 }
 
@@ -1107,7 +1126,9 @@ json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *s
 
 	DEBUG("Request: get (session %s)", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	filter = json_object_get_string(json_object_object_get(request, "filter"));
+	pthread_mutex_unlock(&json_lock);
 
 	if ((data = netconf_get(session_key, filter, &reply)) == NULL) {
 		if (reply == NULL) {
@@ -1135,11 +1156,13 @@ json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const c
 
 	DEBUG("Request: get-config (session %s)", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	filter = json_object_get_string(json_object_object_get(request, "filter"));
 
 	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
 		ds_type_s = parse_datastore(source);
 	}
+	pthread_mutex_unlock(&json_lock);
 	if (ds_type_s == -1) {
 		return create_error("Invalid source repository type requested.");
 	}
@@ -1169,12 +1192,15 @@ json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const c
 	json_object *reply = NULL;
 
 	DEBUG("Request: get-schema (session %s)", session_key);
+	pthread_mutex_lock(&json_lock);
 	identifier = json_object_get_string(json_object_object_get(request, "identifier"));
+	version = json_object_get_string(json_object_object_get(request, "version"));
+	format = json_object_get_string(json_object_object_get(request, "format"));
+	pthread_mutex_lock(&json_lock);
+
 	if (identifier == NULL) {
 		return create_error("No identifier for get-schema supplied.");
 	}
-	version = json_object_get_string(json_object_object_get(request, "version"));
-	format = json_object_get_string(json_object_object_get(request, "format"));
 
 	DEBUG("get-schema(version: %s, format: %s)", version, format);
 	if ((data = netconf_getschema(session_key, identifier, version, format, &reply)) == NULL) {
@@ -1210,7 +1236,23 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 
 	DEBUG("Request: edit-config (session %s)", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	defop = json_object_get_string(json_object_object_get(request, "default-operation"));
+	erropt = json_object_get_string(json_object_object_get(request, "error-option"));
+	/* get parameters */
+	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
+		ds_type_t = parse_datastore(target);
+	}
+	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
+		ds_type_s = parse_datastore(source);
+	} else {
+		/* source is optional, default value is config */
+		ds_type_s = NC_DATASTORE_CONFIG;
+	}
+	config = json_object_get_string(json_object_object_get(request, "config"));
+	testopt = json_object_get_string(json_object_object_get(request, "test-option"));
+	pthread_mutex_unlock(&json_lock);
+
 	if (defop != NULL) {
 		if (strcmp(defop, "merge") == 0) {
 			defop_type = NC_EDIT_DEFOP_MERGE;
@@ -1225,7 +1267,6 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 		defop_type = NC_EDIT_DEFOP_NOTSET;
 	}
 
-	erropt = json_object_get_string(json_object_object_get(request, "error-option"));
 	if (erropt != NULL) {
 		if (strcmp(erropt, "continue-on-error") == 0) {
 			erropt_type = NC_EDIT_ERROPT_CONT;
@@ -1240,32 +1281,19 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 		erropt_type = 0;
 	}
 
-	/* get parameters */
-	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
-		ds_type_t = parse_datastore(target);
-	}
-	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
-		ds_type_s = parse_datastore(source);
-	} else {
-		/* source is optional, default value is config */
-		ds_type_s = NC_DATASTORE_CONFIG;
-	}
 	if (ds_type_t == -1) {
 		return create_error("Invalid target repository type requested.");
 	}
 	if (ds_type_s == NC_DATASTORE_CONFIG) {
-		config = json_object_get_string(json_object_object_get(request, "config"));
 		if (config == NULL) {
 			return create_error("Invalid config data parameter.");
 		}
 	} else if (ds_type_s == NC_DATASTORE_URL){
-		config = json_object_get_string(json_object_object_get(request, "uri-source"));
 		if (config == NULL) {
 			config = "";
 		}
 	}
 
-	testopt = json_object_get_string(json_object_object_get(request, "test-option"));
 	if (testopt != NULL) {
 		testopt_type = parse_testopt(testopt);
 	} else {
@@ -1296,6 +1324,7 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 
 	DEBUG("Request: copy-config (session %s)", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	/* get parameters */
 	if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
 		ds_type_t = parse_datastore(target);
@@ -1303,10 +1332,14 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 	if ((source = json_object_get_string(json_object_object_get(request, "source"))) != NULL) {
 		ds_type_s = parse_datastore(source);
 	}
+	config = json_object_get_string(json_object_object_get(request, "config"));
+	uri_src = json_object_get_string(json_object_object_get(request, "uri-source"));
+	uri_trg = json_object_get_string(json_object_object_get(request, "uri-target"));
+	pthread_mutex_unlock(&json_lock);
+
 	if (source == NULL) {
 		/* no explicit source specified -> use config data */
 		ds_type_s = NC_DATASTORE_CONFIG;
-		config = json_object_get_string(json_object_object_get(request, "config"));
 	} else if (ds_type_s == -1) {
 		/* source datastore specified, but it is invalid */
 		return create_error("Invalid source repository type requested.");
@@ -1324,13 +1357,11 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 	}
 
 	if (ds_type_s == NC_DATASTORE_URL) {
-		uri_src = json_object_get_string(json_object_object_get(request, "uri-source"));
 		if (uri_src == NULL) {
 			uri_src = "";
 		}
 	}
 	if (ds_type_t == NC_DATASTORE_URL) {
-		uri_trg = json_object_get_string(json_object_object_get(request, "uri-target"));
 		if (uri_trg == NULL) {
 			uri_trg = "";
 		}
@@ -1353,7 +1384,9 @@ json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const cha
 
 	DEBUG("Request: generic request for session %s", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	config = json_object_get_string(json_object_object_get(request, "content"));
+	pthread_mutex_unlock(&json_lock);
 
 	if (config == NULL) {
 		return create_error("Missing content parameter.");
@@ -1368,8 +1401,10 @@ json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const cha
 		}
 	} else {
 		if (data == NULL) {
+			pthread_mutex_lock(&json_lock);
 			reply = json_object_new_object();
 			json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+			pthread_mutex_unlock(&json_lock);
 		} else {
 			reply = create_data(data);
 			free(data);
@@ -1406,7 +1441,9 @@ json_object *handle_op_kill(apr_pool_t *pool, json_object *request, const char *
 
 	DEBUG("Request: kill-session, session %s", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	sid = json_object_get_string(json_object_object_get(request, "session-id"));
+	pthread_mutex_unlock(&json_lock);
 
 	if (sid == NULL) {
 		return create_error("Missing session-id parameter.");
@@ -1516,14 +1553,17 @@ void notification_history(time_t eventtime, const char *content)
 		return;
 	}
 	DEBUG("Got notification from history %lu.", (long unsigned) eventtime);
+	pthread_mutex_lock(&json_lock);
 	json_object *notif = json_object_new_object();
 	if (notif == NULL) {
 		DEBUG("Could not allocate memory for notification (json).");
-		return;
+		goto failed;
 	}
 	json_object_object_add(notif, "eventtime", json_object_new_int64(eventtime));
 	json_object_object_add(notif, "content", json_object_new_string(content));
 	json_object_array_add(notif_history_array, notif);
+failed:
+	pthread_mutex_unlock(&json_lock);
 }
 
 json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, const char *session_key)
@@ -1539,9 +1579,11 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 
 	DEBUG("Request: get notification history, session %s", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	sid = json_object_get_string(json_object_object_get(request, "session"));
 	from = json_object_get_int64(json_object_object_get(request, "from"));
 	to = json_object_get_int64(json_object_object_get(request, "to"));
+	pthread_mutex_unlock(&json_lock);
 
 	start = time(NULL) + from;
 	stop = time(NULL) + to;
@@ -1592,16 +1634,20 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 			pthread_mutex_unlock(&locked_session->lock);
 			DEBUG("LOCK mutex %s", __func__);
 			pthread_mutex_lock(&ntf_history_lock);
+			pthread_mutex_lock(&json_lock);
 			json_object *notif_history_array = json_object_new_array();
+			pthread_mutex_unlock(&json_lock);
 			if (pthread_setspecific(notif_history_key, notif_history_array) != 0) {
 				DEBUG("notif_history: cannot set thread-specific hash value.");
 			}
 
 			ncntf_dispatch_receive(temp_session, notification_history);
 
+			pthread_mutex_lock(&json_lock);
 			reply = json_object_new_object();
 			json_object_object_add(reply, "notifications", notif_history_array);
 			//json_object_put(notif_history_array);
+			pthread_mutex_unlock(&json_lock);
 
 			DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&ntf_history_lock);
@@ -1637,9 +1683,11 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 
 	DEBUG("Request: validate datastore, session %s", session_key);
 
+	pthread_mutex_lock(&json_lock);
 	sid = json_object_get_string(json_object_object_get(request, "session"));
 	target = json_object_get_string(json_object_object_get(request, "target"));
 	url = json_object_get_string(json_object_object_get(request, "url"));
+	pthread_mutex_unlock(&json_lock);
 
 
 	if ((sid == NULL) || (target == NULL)) {
@@ -1738,21 +1786,31 @@ void * thread_routine (void * arg)
 		DEBUG("Check read buffer.");
 		if (buffer != NULL) {
 			enum json_tokener_error jerr;
+			pthread_mutex_lock(&json_lock);
 			request = json_tokener_parse_verbose(buffer, &jerr);
 			if (jerr != json_tokener_success) {
 				DEBUG("JSON parsing error");
+				pthread_mutex_unlock(&json_lock);
 				continue;
 			}
-			operation = json_object_get_int(json_object_object_get(request, "type"));
 
+			operation = json_object_get_int(json_object_object_get(request, "type"));
 			session_key = json_object_get_string(json_object_object_get(request, "session"));
+			pthread_mutex_unlock(&json_lock);
+
 			DEBUG("operation %d session_key %s.", operation, session_key);
 			/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
 			if (operation != MSG_CONNECT && session_key == NULL) {
 				reply = create_error("Missing session specification.");
+				pthread_mutex_lock(&json_lock);
 				msgtext = json_object_to_json_string(reply);
+				pthread_mutex_unlock(&json_lock);
+
 				send(client, msgtext, strlen(msgtext) + 1, 0);
+
+				pthread_mutex_lock(&json_lock);
 				json_object_put(reply);
+				pthread_mutex_unlock(&json_lock);
 				/* there is some stupid client, so close the connection to give a chance to some other client */
 				close(client);
 				break;
@@ -1763,7 +1821,9 @@ void * thread_routine (void * arg)
 
 			/* prepare reply envelope */
 			if (reply != NULL) {
+				pthread_mutex_lock(&json_lock);
 				json_object_put(reply);
+				pthread_mutex_unlock(&json_lock);
 			}
 			reply = NULL;
 
@@ -1792,9 +1852,11 @@ void * thread_routine (void * arg)
 			case MSG_LOCK:
 			case MSG_UNLOCK:
 				/* get parameters */
+				pthread_mutex_lock(&json_lock);
 				if ((target = json_object_get_string(json_object_object_get(request, "target"))) != NULL) {
 					ds_type_t = parse_datastore(target);
 				}
+				pthread_mutex_unlock(&json_lock);
 
 				if (ds_type_t == -1) {
 					reply = create_error("Invalid target repository type requested.");
@@ -1803,7 +1865,9 @@ void * thread_routine (void * arg)
 				switch(operation) {
 				case MSG_DELETECONFIG:
 					DEBUG("Request: delete-config (session %s)", session_key);
+					pthread_mutex_lock(&json_lock);
 					url = json_object_get_string(json_object_object_get(request, "url"));
+					pthread_mutex_unlock(&json_lock);
 					reply = netconf_deleteconfig(session_key, ds_type_t, url);
 					break;
 				case MSG_LOCK:
@@ -1822,8 +1886,10 @@ void * thread_routine (void * arg)
 				if (reply == NULL) {
 					if (err_reply == NULL) {
 						/** \todo more clever error message wanted */
+						pthread_mutex_lock(&json_lock);
 						reply = json_object_new_object();
 						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+						pthread_mutex_unlock(&json_lock);
 					} else {
 						/* use filled err_reply from libnetconf's callback */
 						reply = err_reply;
@@ -1857,8 +1923,8 @@ void * thread_routine (void * arg)
 				break;
 			}
 			DEBUG("Clean request json object.");
+			pthread_mutex_lock(&json_lock);
 			json_object_put(request);
-
 			DEBUG("Send reply json object.");
 			/* send reply to caller */
 			if (reply != NULL) {
@@ -1870,9 +1936,12 @@ void * thread_routine (void * arg)
 					}
 					break;
 				}
+				pthread_mutex_unlock(&json_lock);
+
 				DEBUG("Send framed reply json object.");
 				send(client, chunked_out_msg, strlen(chunked_out_msg) + 1, 0);
 				DEBUG("Clean reply json object.");
+				pthread_mutex_lock(&json_lock);
 				json_object_put(reply);
 				reply = NULL;
 				DEBUG("Clean message buffer.");
@@ -1886,7 +1955,9 @@ void * thread_routine (void * arg)
 					json_object_put(err_reply);
 					err_reply = NULL;
 				}
+				pthread_mutex_unlock(&json_lock);
 			} else {
+				pthread_mutex_unlock(&json_lock);
 				DEBUG("Reply is NULL, shouldn't be...");
 				continue;
 			}
@@ -2101,6 +2172,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		goto error_exit;
 	}
 	pthread_mutex_init(&ntf_history_lock, NULL);
+	pthread_mutex_init(&json_lock, NULL);
 	DEBUG("init of notif_history_key.");
 	if (pthread_key_create(&notif_history_key, NULL) != 0) {
 		DEBUG("init of notif_history_key failed");
