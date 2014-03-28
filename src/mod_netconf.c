@@ -1222,7 +1222,7 @@ json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const c
 	identifier = json_object_get_string(json_object_object_get(request, "identifier"));
 	version = json_object_get_string(json_object_object_get(request, "version"));
 	format = json_object_get_string(json_object_object_get(request, "format"));
-	pthread_mutex_lock(&json_lock);
+	pthread_mutex_unlock(&json_lock);
 
 	if (identifier == NULL) {
 		return create_error("No identifier for get-schema supplied.");
