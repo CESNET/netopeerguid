@@ -562,11 +562,19 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	}
 
 	DEBUG("Send NC subscribe.");
-	/** \todo replace with sth like netconf_op(http_server, session_hash, rpc) */
+	create_err_reply_p();
 	if (send_recv_process(session, "subscribe", rpc) != 0) {
 		DEBUG("Subscription RPC failed.");
 		goto operation_failed;
 	}
+
+	GETSPEC_ERR_REPLY
+	if (err_reply != NULL) {
+                free_err_reply();
+                DEBUG("RPC-Error received and cleaned, because we can't send it anywhere.");
+                goto operation_failed;
+	}
+
 	rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
 	locked_session->ntfc_subscribed = 1;
 
@@ -658,9 +666,11 @@ static int callback_notification(struct libwebsocket_context *context,
 
 			while ((notif = (notification_t *) apr_array_pop(ls->notifications)) != NULL) {
 				n = 0;
+				pthread_mutex_lock(&json_lock);
 				json_object *notif_json = json_object_new_object();
 				json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
 				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
+				pthread_mutex_unlock(&json_lock);
 
 				const char *msgtext = json_object_to_json_string(notif_json);
 
@@ -673,7 +683,9 @@ static int callback_notification(struct libwebsocket_context *context,
 					break;
 				}
 
+				pthread_mutex_lock(&json_lock);
 				json_object_put(notif_json);
+				pthread_mutex_unlock(&json_lock);
 				free(notif->content);
 			}
 			DEBUG("notification: POP notifications done");

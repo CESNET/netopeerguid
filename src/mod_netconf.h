@@ -84,6 +84,9 @@ typedef struct {
 
 extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
 
+extern pthread_key_t err_reply_key;
+extern pthread_mutex_t json_lock;
+
 json_object *create_error(const char *errmess);
 json_object *create_ok();
 
@@ -101,6 +104,33 @@ extern server_rec *http_server;
 		fprintf(stderr, "\n"); \
 	} \
 } while (0);
+
+#define GETSPEC_ERR_REPLY \
+json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key); \
+json_object *err_reply = ((err_reply_p != NULL)?(*err_reply_p):NULL);
+
+#define CHECK_ERR_SET_REPLY \
+if (reply == NULL) { \
+	GETSPEC_ERR_REPLY \
+	if (err_reply != NULL) { \
+		/* use filled err_reply from libnetconf's callback */ \
+		reply = err_reply; \
+	} \
+}
+
+#define CHECK_ERR_SET_REPLY_ERR(errmsg) \
+if (reply == NULL) { \
+	GETSPEC_ERR_REPLY \
+	if (err_reply == NULL) { \
+		reply = create_error(errmsg); \
+	} else { \
+		/* use filled err_reply from libnetconf's callback */ \
+		reply = err_reply; \
+	} \
+}
+void create_err_reply_p();
+void clean_err_reply();
+void free_err_reply();
 
 #endif
 

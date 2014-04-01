@@ -120,29 +120,7 @@ apr_hash_t *netconf_sessions_list = NULL;
 
 static pthread_key_t notif_history_key;
 
-static pthread_key_t err_reply_key;
-
-#define GETSPEC_ERR_REPLY json_object *err_reply = *((json_object **) pthread_getspecific(err_reply_key));
-
-#define CHECK_ERR_SET_REPLY \
-if (reply == NULL) { \
-	GETSPEC_ERR_REPLY \
-	if (err_reply != NULL) { \
-		/* use filled err_reply from libnetconf's callback */ \
-		reply = err_reply; \
-	} \
-}
-
-#define CHECK_ERR_SET_REPLY_ERR(errmsg) \
-if (reply == NULL) { \
-	GETSPEC_ERR_REPLY \
-	if (err_reply == NULL) { \
-		reply = create_error(errmsg); \
-	} else { \
-		/* use filled err_reply from libnetconf's callback */ \
-		reply = err_reply; \
-	} \
-}
+pthread_key_t err_reply_key;
 
 volatile int isterminated = 0;
 
@@ -229,6 +207,10 @@ void netconf_callback_error_process(const char* tag,
 		const char* sid)
 {
 	json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
+	if (err_reply_p == NULL) {
+		DEBUG("Error message was not allocated. %s", __func__);
+		return;
+	}
 	json_object *err_reply = *err_reply_p;
 
 	json_object *array = NULL;
@@ -321,6 +303,49 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 
 }
 
+void create_err_reply_p()
+{
+	json_object **err_reply = calloc(1, sizeof(json_object **));
+	if (err_reply == NULL) {
+		DEBUG("Allocation of err_reply storage failed!");
+		return;
+	}
+	if (pthread_setspecific(err_reply_key, err_reply) != 0) {
+		DEBUG("cannot set thread-specific value.");
+	}
+}
+
+void clean_err_reply()
+{
+	json_object **err_reply = (json_object **) pthread_getspecific(err_reply_key);
+	if (err_reply != NULL) {
+		if (*err_reply != NULL) {
+			pthread_mutex_lock(&json_lock);
+			json_object_put(*err_reply);
+			pthread_mutex_unlock(&json_lock);
+		}
+		if (pthread_setspecific(err_reply_key, err_reply) != 0) {
+			DEBUG("Cannot set thread-specific hash value.");
+		}
+	}
+}
+
+void free_err_reply()
+{
+	json_object **err_reply = (json_object **) pthread_getspecific(err_reply_key);
+	if (err_reply != NULL) {
+		if (*err_reply != NULL) {
+			pthread_mutex_lock(&json_lock);
+			json_object_put(*err_reply);
+			pthread_mutex_unlock(&json_lock);
+		}
+		free(err_reply);
+		err_reply = NULL;
+		if (pthread_setspecific(err_reply_key, err_reply) != 0) {
+			DEBUG("Cannot set thread-specific hash value.");
+		}
+	}
+}
 
 /**
  * \defgroup netconf_operations NETCONF operations
@@ -1751,14 +1776,8 @@ void * thread_routine (void * arg)
 	char *buffer = NULL;
 
 	/* init thread specific err_reply memory */
-	json_object **err_reply = calloc(1, sizeof(json_object **));
-	if (err_reply == NULL) {
-		DEBUG("Allocation of err_reply storage failed!");
-		isterminated = 1;
-	}
-	if (pthread_setspecific(err_reply_key, err_reply) != 0) {
-		DEBUG("notif_history: cannot set thread-specific hash value.");
-	}
+	create_err_reply_p();
+
 	while (!isterminated) {
 		fds.fd = client;
 		fds.events = POLLIN;
@@ -1829,7 +1848,7 @@ void * thread_routine (void * arg)
 			}
 
 			/* null global JSON error-reply */
-			(*err_reply) = NULL;
+			clean_err_reply();
 
 			/* prepare reply envelope */
 			if (reply != NULL) {
@@ -1895,17 +1914,12 @@ void * thread_routine (void * arg)
 					break;
 				}
 
+				CHECK_ERR_SET_REPLY
 				if (reply == NULL) {
-					if (*err_reply == NULL) {
-						/** \todo more clever error message wanted */
-						pthread_mutex_lock(&json_lock);
-						reply = json_object_new_object();
-						json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-						pthread_mutex_unlock(&json_lock);
-					} else {
-						/* use filled err_reply from libnetconf's callback */
-						reply = *err_reply;
-					}
+					pthread_mutex_lock(&json_lock);
+					reply = json_object_new_object();
+					json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
+					pthread_mutex_unlock(&json_lock);
 				}
 				break;
 			case MSG_KILL:
@@ -1963,35 +1977,18 @@ void * thread_routine (void * arg)
 					free(buffer);
 					buffer = NULL;
 				}
-				if ((err_reply != NULL) && (*err_reply != NULL)) {
-					json_object_put(*err_reply);
-					*err_reply = NULL;
-				}
 				pthread_mutex_unlock(&json_lock);
+				clean_err_reply();
 			} else {
 				pthread_mutex_unlock(&json_lock);
 				DEBUG("Reply is NULL, shouldn't be...");
-				if (*err_reply == NULL) {
-					DEBUG("No error was set - really strange situation");
-				} else {
-					DEBUG("Error was set but it was not sent.");
-				}
 				continue;
 			}
 		}
 	}
 	free (arg);
 
-	err_reply = (json_object **) pthread_getspecific(err_reply_key);
-	if (err_reply != NULL) {
-		if (*err_reply != NULL) {
-			pthread_mutex_lock(&json_lock);
-			json_object_put(*err_reply);
-			pthread_mutex_unlock(&json_lock);
-		}
-		free(err_reply);
-		err_reply = NULL;
-	}
+	free_err_reply();
 
 	return retval;
 }
