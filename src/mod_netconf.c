@@ -539,8 +539,8 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 			/* there is error handled by callback */
 			if (data != NULL) {
 				free(*data);
+				(*data) = NULL;
 			}
-			(*data) = NULL;
 			return NULL;
 		case NC_MSG_REPLY:
 			switch (replyt = nc_reply_get_type(reply)) {
