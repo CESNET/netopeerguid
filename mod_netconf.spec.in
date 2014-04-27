@@ -1,30 +1,30 @@
-Summary: Netopeer - client web user interface
+Summary: Netopeer-GUI (backend)
 Name: mod_netconf
-Version: %(cut -f1 ./VERSION | tr -d '\n')
+Version: @VERSION@
 Release: @RELEASE@
-URL: http://www.liberouter.org/
-Source: https://www.liberouter.org/repo/SOURCES/%{name}-%{version}-%{release}.tar.gz
+URL: https://github.com/CESNET/mod_netconf
+Source: %{name}-%{version}-%{release}.tar.gz
 Group: Liberouter
 License: BSD
 Vendor: CESNET, z.s.p.o.
 Packager: @USERNAME@ <@USERMAIL@>
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}
 
-BuildRequires: @BUILDREQS@
-Requires: @REQS@
+BuildRequires: apr apr-util libxml2-devel json-c-devel libwebsockets-devel libnetconf-devel
+Requires: json-c libwebsockets libnetconf httpd libxml2
 
 %description
-Back-end for web user interface of Netopeer client.
+Backend for Netopeer-GUI, available at https://github.com/CESNET/Netopeer-GUI
 
 %prep
 %setup
 
 %build
-%configure @LIBNETCONF_WITH@;
+%configure --prefix="$RPM_BUILD_ROOT" httpdmoduledir="/usr/lib64/httpd/modules" httpdconfddir="/etc/httpd/conf.d"
 make
 
 %install
-make DESTDIR=$RPM_BUILD_ROOT RUN="RPM" install
+make install
 
 %post
 #add device module to configuration only when installing, not on update or reinstall.

@@ -39,10 +39,16 @@ fi
 AC_SUBST([CHOWN_GROUP])
 
 AC_ARG_VAR(httpdmoduledir, [Installation directory for Apache module, leave unset to use Apache default.])
+if test "x$httpdmoduledir" != x; then
+	httpdmoduledir="${prefix}/${httpdmoduledir}"
+fi
 AC_SUBST(httpdmoduledir)
 
+AM_CONDITIONAL([MANUAL_CONFD], [test "x$httpdconfddir" != x])
 if test "x$httpdconfddir" == x; then
 	httpdconfddir="/etc/httpd/conf.d"
+else
+	httpdconfddir="${prefix}/${httpdconfddir}"
 fi
 AC_ARG_VAR(httpdconfddir, [Directory for Apache configuration files [/etc/httpd/conf.d]])
 AC_SUBST(httpdconfddir)
@@ -55,7 +61,6 @@ else
 AC_MSG_ERROR([Apxs for Apache module compilation and installation was not found.])
 fi
 
-AM_CONDITIONAL([MANUAL_CONFD], [test -n "$with_apxs" ])
 
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
@@ -115,6 +120,7 @@ AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 
 AC_CONFIG_FILES([Makefile
                 config.h
+		mod_netconf.spec
                 conf.d/Makefile
 		src/Makefile
 		])
@@ -143,7 +149,6 @@ echo "  webgui dir...........: $webguidir"
 echo "  webgui name..........: $webguiname"
 echo "  httpdmoduledir.......: $(test -z "$httpdmoduledir" && echo "Apache default path" || echo "$httpdmoduledir")"
 echo "  httpdconfddir........: $(test -z "$httpdconfddir" && echo "Apache default path" || echo "$httpdconfddir")"
-echo "  run composer install.: $composerinstall"
 echo "Su user for process:...............: $SU_USER"
 echo "Su group for process:..............: $SU_GROUP"
 echo "Chown user for sock file:...............: $CHOWN_USER"
