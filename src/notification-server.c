@@ -534,6 +534,8 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
 	start = time(NULL) + start_time;
 	stop = time(NULL) + stop_time;
+	start = 0;
+	stop = 0;
 	DEBUG("notifications: history: %u %u", (unsigned int) start, (unsigned int) stop);
 
 	if (session == NULL) {

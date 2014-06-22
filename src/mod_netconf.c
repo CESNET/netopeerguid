@@ -367,7 +367,6 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 	/* connect to the requested NETCONF server */
 	password = (char*)pass;
 	DEBUG("prepare to connect %s@%s:%s", user, host, port);
-	nc_verbosity(NC_VERB_DEBUG);
 	session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
 	DEBUG("nc_session_connect done");
 
@@ -1705,7 +1704,6 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 	const char *sid = NULL;
 	const char *target = NULL;
 	const char *url = NULL;
-	struct session_with_mutex *locked_session = NULL;
 	nc_rpc *rpc = NULL;
 	NC_DATASTORE target_ds;
 
