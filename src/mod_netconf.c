@@ -1425,11 +1425,6 @@ json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const cha
 	config = json_object_get_string(json_object_object_get(request, "content"));
 	pthread_mutex_unlock(&json_lock);
 
-	if (config == NULL) {
-		return create_error("Missing content parameter.");
-	}
-
-	/* TODO */
 	reply = netconf_generic(session_key, config, &data);
 	if (reply == NULL) {
 		GETSPEC_ERR_REPLY
