@@ -159,7 +159,7 @@ static char* gen_ncsession_hash( const char* hostname, const char* port, const c
 	return (hash);
 }
 
-int netconf_callback_ssh_hostkey_check (const char* hostname, int keytype, const char* fingerprint)
+int netconf_callback_ssh_hostkey_check (const char* hostname, LIBSSH2_SESSION *session)
 {
 	/* always approve */
 	return (EXIT_SUCCESS);
