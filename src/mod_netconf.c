@@ -1728,8 +1728,6 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 	if (rpc == NULL) {
 		DEBUG("mod_netconf: creating rpc request failed");
 		reply = create_error("Creation of RPC request failed.");
-		DEBUG("UNLOCK mutex %s", __func__);
-		pthread_mutex_unlock(&locked_session->lock);
 		return reply;
 	}
 

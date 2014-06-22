@@ -443,44 +443,34 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	target_session = get_ncsession_from_key(session_hash);
 	if (target_session == NULL) {
 		DEBUG("no session found last_session_key (%s)", session_hash);
-		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock");
-			return;
-		}
-		return;
+		goto unlock_glob;
 	}
 	if (pthread_mutex_lock(&target_session->lock) != 0) {
-		DEBUG("Error while locking rwlock");
-	}
-	if (pthread_rwlock_unlock(&session_lock) != 0) {
 		DEBUG("Error while locking rwlock");
 	}
 
 	if (target_session->notifications == NULL) {
 		DEBUG("target_session->notifications is NULL");
-		if (pthread_mutex_unlock(&target_session->lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-			return;
-		}
-		return;
+		goto unlock_all;
 	}
 	DEBUG("notification: ready to push to notifications queue");
 	ntf = (notification_t *) apr_array_push(target_session->notifications);
 	if (ntf == NULL) {
 		DEBUG("Failed to allocate element ");
-		if (pthread_mutex_unlock(&target_session->lock) != 0) {
-			DEBUG("Error while unlocking rwlock");
-			return;
-		}
-		return;
+		goto unlock_all;
 	}
 	ntf->eventtime = eventtime;
 	ntf->content = strdup(content);
 
 	DEBUG("added notif to queue %u (%s)", (unsigned int) ntf->eventtime, "notification");
 
+unlock_all:
 	if (pthread_mutex_unlock(&target_session->lock) != 0) {
 		DEBUG("Error while unlocking rwlock");
+	}
+unlock_glob:
+	if (pthread_rwlock_unlock(&session_lock) != 0) {
+		DEBUG("Error while locking rwlock");
 	}
 }
 
