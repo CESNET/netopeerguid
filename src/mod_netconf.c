@@ -722,7 +722,8 @@ static char* netconf_getconfig(const char* session_key, NC_DATASTORE source, con
 #ifdef HAVE_WITHDEFAULTS_TAGGED
 	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
 #else
-	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
+	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
 #endif
 		DEBUG("mod_netconf: setting withdefaults failed");
 	}
@@ -783,7 +784,9 @@ static char* netconf_get(const char* session_key, const char* filter, json_objec
 	}
 
 	/* tell server to show all elements even if they have default values */
-	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
+	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
+	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
 		DEBUG("mod_netconf: setting withdefaults failed");
 	}
 
