@@ -6,9 +6,10 @@
  * \date 2011
  * \date 2012
  * \date 2013
+ * \date 2014
  */
 /*
- * Copyright (C) 2011-2013 CESNET
+ * Copyright (C) 2011-2014 CESNET
  *
  * LICENSE TERMS
  *
@@ -52,6 +53,11 @@
 #include <http_config.h>
 #include <apr_hash.h>
 #include <json/json.h>
+
+/**
+ * \brief Check if pointer is not NULL, free memory and set pointer to NULL
+ */
+#define CHECK_AND_FREE(pointer) if (pointer != NULL) { free(pointer); pointer = NULL; }
 
 struct pass_to_thread {
 	int client; /**< opened socket */
