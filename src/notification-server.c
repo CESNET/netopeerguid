@@ -125,7 +125,7 @@ static int callback_http(struct libwebsocket_context *context,
 	static unsigned char buffer[4096];
 	struct stat stat_buf;
 	struct per_session_data__http *pss = (struct per_session_data__http *)user;
-	int fd = (int)(long)in;
+	struct libwebsocket_pollargs *pa = (struct libwebsocket_pollargs *) in;
 
 	switch (reason) {
 	case LWS_CALLBACK_HTTP:
@@ -189,7 +189,7 @@ static int callback_http(struct libwebsocket_context *context,
 
 		sprintf(buf, "%s%s", resource_path, whitelist[n].urlpath);
 
-		if (libwebsockets_serve_http_file(context, wsi, buf, whitelist[n].mimetype))
+		if (libwebsockets_serve_http_file(context, wsi, buf, whitelist[n].mimetype, NULL))
 			return -1; /* through completion or error, close the socket */
 
 		/*
@@ -238,6 +238,20 @@ bail:
 		close(pss->fd);
 		return -1;
 
+	case LWS_CALLBACK_LOCK_POLL:
+		/*
+		 * lock mutex to protect pollfd state
+		 * called before any other POLL related callback
+		 */
+		break;
+
+	case LWS_CALLBACK_UNLOCK_POLL:
+		/*
+		 * unlock mutex to protect pollfd state when
+		 * called after any other POLL related callback
+		 */
+		break;
+
 	/*
 	 * callback for confirming to continue with client IP appear in
 	 * protocol 0 callback since no websocket protocol has been agreed
@@ -260,34 +274,30 @@ bail:
 	 */
 
 	case LWS_CALLBACK_ADD_POLL_FD:
-
 		if (count_pollfds >= max_poll_elements) {
 			lwsl_err("LWS_CALLBACK_ADD_POLL_FD: too many sockets to track\n");
 			return 1;
 		}
 
-		fd_lookup[fd] = count_pollfds;
-		pollfds[count_pollfds].fd = fd;
-		pollfds[count_pollfds].events = (int)(long)len;
+		fd_lookup[pa->fd] = count_pollfds;
+		pollfds[count_pollfds].fd = pa->fd;
+		pollfds[count_pollfds].events = pa->events;
 		pollfds[count_pollfds++].revents = 0;
 		break;
 
 	case LWS_CALLBACK_DEL_POLL_FD:
 		if (!--count_pollfds)
 			break;
-		m = fd_lookup[fd];
+		m = fd_lookup[pa->fd];
 		/* have the last guy take up the vacant slot */
 		pollfds[m] = pollfds[count_pollfds];
 		fd_lookup[pollfds[count_pollfds].fd] = m;
 		break;
 
-	case LWS_CALLBACK_SET_MODE_POLL_FD:
-		pollfds[fd_lookup[fd]].events |= (int)(long)len;
+	case LWS_CALLBACK_CHANGE_MODE_POLL_FD:
+		pollfds[fd_lookup[pa->fd]].events = pa->events;
 		break;
 
-	case LWS_CALLBACK_CLEAR_MODE_POLL_FD:
-		pollfds[fd_lookup[fd]].events &= ~(int)(long)len;
-		break;
 
 	default:
 		break;
