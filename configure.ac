@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.63])
-AC_INIT([mod_netconf], [1.0.0], [cejkat@cesnet.cz])
+AC_INIT([mod_netconf], [1.0.2], [cejkat@cesnet.cz])
 AM_INIT_AUTOMAKE([silent-rules])
 AM_SILENT_RULES([yes])
 

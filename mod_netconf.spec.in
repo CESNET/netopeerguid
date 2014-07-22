@@ -24,6 +24,7 @@ Backend for Netopeer-GUI, available at https://github.com/CESNET/Netopeer-GUI
 make
 
 %install
+#make DESTDIR=$RPM_BUILD_ROOT RUN="RPM" install
 make install
 
 %post
