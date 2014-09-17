@@ -80,7 +80,7 @@
 #include "mod_netconf.h"
 
 #define MAX_PROCS 5
-#define SOCKET_FILENAME "/tmp/mod_netconf.sock"
+#define SOCKET_FILENAME "/var/run/mod_netconf.sock"
 #define MAX_SOCKET_CL 10
 #define BUFFER_SIZE 4096
 #define NOTIFICATION_QUEUE_SIZE 10
