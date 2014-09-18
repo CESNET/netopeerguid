@@ -398,7 +398,7 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 		DEBUG("Before session_lock");
 		/* get exclusive access to sessions_list (conns) */
 		DEBUG("LOCK wrlock %s", __func__);
-		if (pthread_rwlock_wrlock (&session_lock) != 0) {
+		if (pthread_rwlock_wrlock(&session_lock) != 0) {
 			nc_session_free(session);
 			free (locked_session);
 			DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
@@ -635,7 +635,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 
 	/* get non-exclusive (read) access to sessions_list (conns) */
 	DEBUG("LOCK wrlock %s", __func__);
-	if (pthread_rwlock_rdlock (&session_lock) != 0) {
+	if (pthread_rwlock_rdlock(&session_lock) != 0) {
 		DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 		res = create_error("Internal: Lock failed.");
 		data = NULL;
@@ -681,7 +681,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 	} else {
 		/* release lock on failure */
 		DEBUG("UNLOCK wrlock %s", __func__);
-		if (pthread_rwlock_unlock (&session_lock) != 0) {
+		if (pthread_rwlock_unlock(&session_lock) != 0) {
 			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		DEBUG("Unknown session to process.");
@@ -2049,7 +2049,7 @@ send_reply:
 			/* send reply to caller */
 			if (reply != NULL) {
 				msgtext = json_object_to_json_string(reply);
-				if (asprintf (&chunked_out_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
+				if (asprintf(&chunked_out_msg, "\n#%d\n%s\n##\n", (int) strlen(msgtext), msgtext) == -1) {
 					if (buffer != NULL) {
 						free(buffer);
 						buffer = NULL;
@@ -2147,7 +2147,7 @@ static void check_timeout_and_close(apr_pool_t *p)
 
 	/* get exclusive access to sessions_list (conns) */
 //DEBUG("LOCK wrlock %s", __func__);
-	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
+	if ((ret = pthread_rwlock_wrlock(&session_lock)) != 0) {
 		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
@@ -2179,7 +2179,7 @@ static void check_timeout_and_close(apr_pool_t *p)
 	}
 	/* get exclusive access to sessions_list (conns) */
 //DEBUG("UNLOCK wrlock %s", __func__);
-	if (pthread_rwlock_unlock (&session_lock) != 0) {
+	if (pthread_rwlock_unlock(&session_lock) != 0) {
 		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }

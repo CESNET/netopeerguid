@@ -623,7 +623,7 @@ static int callback_notification(struct libwebsocket_context *context,
 		}
 		//DEBUG("Callback server writeable.");
 		//DEBUG("lock session lock.");
-		if (pthread_rwlock_wrlock (&session_lock) != 0) {
+		if (pthread_rwlock_wrlock(&session_lock) != 0) {
 			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 			return -1;
 		}
@@ -638,7 +638,7 @@ static int callback_notification(struct libwebsocket_context *context,
 			return -1;
 		}
 		pthread_mutex_lock(&ls->lock);
-		if (pthread_rwlock_unlock (&session_lock) != 0) {
+		if (pthread_rwlock_unlock(&session_lock) != 0) {
 			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 
@@ -779,7 +779,7 @@ static int callback_notification(struct libwebsocket_context *context,
 		//dump_handshake_info(wsi);
 		/* you could return non-zero here and kill the connection */
 		break;
-	//gives segfailt :-(
+	//gives segfault :-(
 	//case LWS_CALLBACK_CLOSED:
 	//	if (pss->session_key != NULL) {
 	//		free(pss->session_key);
