@@ -2040,9 +2040,10 @@ void * thread_routine (void * arg)
 			ds_type_t = (-1);
 
 			DEBUG("Clean request json object.");
-			pthread_mutex_lock(&json_lock);
 			if (request != NULL) {
+				pthread_mutex_lock(&json_lock);
 				json_object_put(request);
+				pthread_mutex_unlock(&json_lock);
 			}
 			DEBUG("Send reply json object.");
 
@@ -2050,12 +2051,14 @@ void * thread_routine (void * arg)
 send_reply:
 			/* send reply to caller */
 			if (reply != NULL) {
+				pthread_mutex_lock(&json_lock);
 				msgtext = json_object_to_json_string(reply);
 				if (asprintf(&chunked_out_msg, "\n#%d\n%s\n##\n", (int) strlen(msgtext), msgtext) == -1) {
 					if (buffer != NULL) {
 						free(buffer);
 						buffer = NULL;
 					}
+					pthread_mutex_unlock(&json_lock);
 					break;
 				}
 				pthread_mutex_unlock(&json_lock);
@@ -2076,7 +2079,6 @@ send_reply:
 				pthread_mutex_unlock(&json_lock);
 				clean_err_reply();
 			} else {
-				pthread_mutex_unlock(&json_lock);
 				DEBUG("Reply is NULL, shouldn't be...");
 				continue;
 			}
