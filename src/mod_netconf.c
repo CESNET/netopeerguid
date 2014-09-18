@@ -956,19 +956,21 @@ static json_object *netconf_generic(const char* session_key, const char* content
 
 void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
+#define FOREACH(I) \
+        I(NC_VERB_ERROR) I(NC_VERB_WARNING) \
+        I(NC_VERB_VERBOSE) I(NC_VERB_DEBUG)
+#define CASE(VAL) case VAL: DEBUG("%s: %s", #VAL, msg); \
+	break;
+
 	switch (level) {
-	case NC_VERB_ERROR:
-		DEBUG("%s", msg);
-		break;
-	case NC_VERB_WARNING:
-		DEBUG("%s", msg);
-		break;
-	case NC_VERB_VERBOSE:
-		DEBUG("%s", msg);
-		break;
-	case NC_VERB_DEBUG:
-		DEBUG("%s", msg);
-		break;
+	FOREACH(CASE)
+	}
+	if (level == NC_VERB_ERROR) {
+		/* return global error */
+		netconf_callback_error_process(NULL /* tag */, NULL /* type */,
+				NULL /* severity */, NULL /* apptag */,
+				NULL /* path */, msg, NULL /* attribute */,
+				NULL /* element */, NULL /* ns */, NULL /* sid */);
 	}
 }
 
