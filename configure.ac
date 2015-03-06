@@ -90,8 +90,8 @@ PKG_CHECK_MODULES([apr], [apr-1])
 PKG_CHECK_MODULES([aprutil], [apr-util-1])
 PKG_CHECK_MODULES([netconf], [libnetconf])
 PKG_CHECK_MODULES([xml], [libxml-2.0])
-CFLAGS="$json_CFLAGS $websockets_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
-LIBS="$json_LIBS $websockets_LIBS $netconf_LIBS $xml_LIBS"
+CFLAGS="$json_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
+LIBS="$json_LIBS $netconf_LIBS $xml_LIBS"
 CPPFLAGS="$xml_CPPFLAGS"
 
 AX_PTHREAD([CC="$PTHREAD_CC"],
@@ -101,9 +101,11 @@ AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],
 AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
 [AC_CHECK_LIB([websockets], [libwebsocket_create_context])
-CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS"]),
+CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
+LIBS="$LIBS $websockets_LIBS"]),
 [AC_CHECK_LIB([websockets], [libwebsocket_create_context])
-CFLAGS="$CFLAGS -DWITH_NOTIFICATIONS"])
+CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
+LIBS="$LIBS $websockets_LIBS"])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdlib.h string.h sys/socket.h sys/time.h unistd.h])
