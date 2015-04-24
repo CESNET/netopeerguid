@@ -208,14 +208,14 @@ void netconf_callback_error_process(const char* tag,
 {
 	json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
 	if (err_reply_p == NULL) {
-		DEBUG("Error message was not allocated. %s", __func__);
+		ERROR("Error message was not allocated. %s", __func__);
 		return;
 	}
 	json_object *err_reply = *err_reply_p;
 
 	json_object *array = NULL;
 	if (err_reply == NULL) {
-		DEBUG("error calback: empty error list");
+		ERROR("error calback: empty error list");
 		pthread_mutex_lock(&json_lock);
 		err_reply = json_object_new_object();
 		array = json_object_new_array();
@@ -227,7 +227,7 @@ void netconf_callback_error_process(const char* tag,
 		pthread_mutex_unlock(&json_lock);
 		(*err_reply_p) = err_reply;
 	} else {
-		DEBUG("error calback: nonempty error list");
+		ERROR("error calback: nonempty error list");
 		pthread_mutex_lock(&json_lock);
 		if (json_object_object_get_ex(err_reply, "errors", &array) == TRUE) {
 			if (message != NULL) {
@@ -253,13 +253,13 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 	struct nc_cpblts* cpblts = NULL;
 
 	if (s == NULL) {
-		DEBUG("No session given.");
+		ERROR("No session given.");
 		return;
 	}
 
 	pthread_mutex_lock(&json_lock);
 	if (s->hello_message != NULL) {
-		DEBUG("clean previous hello message");
+		ERROR("clean previous hello message");
 		//json_object_put(s->hello_message);
 		if (json_object_object_get_ex(s->hello_message, "sid", &js_tmp) == TRUE) {
 			j_old_sid = json_object_get_string(js_tmp);
@@ -297,7 +297,7 @@ void prepare_status_message(struct session_with_mutex *s, struct nc_session *ses
 		}
 		DEBUG("%s", json_object_to_json_string(s->hello_message));
 	} else {
-		DEBUG("Session was not given.");
+		ERROR("Session was not given.");
 		json_object_object_add(s->hello_message, "type", json_object_new_int(REPLY_ERROR));
 		json_object_object_add(s->hello_message, "error-message", json_object_new_string("Invalid session identifier."));
 	}
@@ -310,11 +310,11 @@ void create_err_reply_p()
 {
 	json_object **err_reply = calloc(1, sizeof(json_object **));
 	if (err_reply == NULL) {
-		DEBUG("Allocation of err_reply storage failed!");
+		ERROR("Allocation of err_reply storage failed!");
 		return;
 	}
 	if (pthread_setspecific(err_reply_key, err_reply) != 0) {
-		DEBUG("cannot set thread-specific value.");
+		ERROR("cannot set thread-specific value.");
 	}
 }
 
@@ -328,7 +328,7 @@ void clean_err_reply()
 			pthread_mutex_unlock(&json_lock);
 		}
 		if (pthread_setspecific(err_reply_key, err_reply) != 0) {
-			DEBUG("Cannot set thread-specific hash value.");
+			ERROR("Cannot set thread-specific hash value.");
 		}
 	}
 }
@@ -345,7 +345,7 @@ void free_err_reply()
 		free(err_reply);
 		err_reply = NULL;
 		if (pthread_setspecific(err_reply_key, err_reply) != 0) {
-			DEBUG("Cannot set thread-specific hash value.");
+			ERROR("Cannot set thread-specific hash value.");
 		}
 	}
 }
@@ -387,7 +387,7 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 			session = NULL;
 			free(locked_session);
 			locked_session = NULL;
-			DEBUG("Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
+			ERROR("Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
 		locked_session->session = session;
@@ -401,7 +401,7 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 		if (pthread_rwlock_wrlock(&session_lock) != 0) {
 			nc_session_free(session);
 			free (locked_session);
-			DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			return NULL;
 		}
 		locked_session->notifications = apr_array_make(pool, NOTIFICATION_QUEUE_SIZE, sizeof(notification_t));
@@ -417,7 +417,7 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 		/* unlock session list */
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock (&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 
 		/* store information about session from hello message for future usage */
@@ -429,7 +429,7 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 		DEBUG("NETCONF session established");
 		return (session_key);
 	} else {
-		DEBUG("Connection could not be established");
+		ERROR("Connection could not be established");
 		return (NULL);
 	}
 
@@ -440,7 +440,7 @@ static int close_and_free_session(struct session_with_mutex *locked_session)
 	DEBUG("lock private lock.");
 	DEBUG("LOCK mutex %s", __func__);
 	if (pthread_mutex_lock(&locked_session->lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("Error while locking rwlock");
 	}
 	locked_session->ntfc_subscribed = 0;
 	locked_session->closed = 1;
@@ -452,7 +452,7 @@ static int close_and_free_session(struct session_with_mutex *locked_session)
 	DEBUG("unlock private lock.");
 	DEBUG("UNLOCK mutex %s", __func__);
 	if (pthread_mutex_unlock(&locked_session->lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("Error while locking rwlock");
 	}
 
 	DEBUG("unlock session lock.");
@@ -485,7 +485,7 @@ static int netconf_close(const char* session_key, json_object **reply)
 	DEBUG("lock session lock.");
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_wrlock (&session_lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("Error while locking rwlock");
 		(*reply) = create_error("Internal: Error while locking.");
 		return EXIT_FAILURE;
 	}
@@ -496,14 +496,14 @@ static int netconf_close(const char* session_key, json_object **reply)
 
 	DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock");
+		ERROR("Error while unlocking rwlock");
 		(*reply) = create_error("Internal: Error while unlocking.");
 	}
 
 	if ((locked_session != NULL) && (locked_session->session != NULL)) {
 		return close_and_free_session(locked_session);
 	} else {
-		DEBUG("Unknown session to close");
+		ERROR("Unknown session to close");
 		(*reply) = create_error("Internal: Unkown session to close.");
 		return (EXIT_FAILURE);
 	}
@@ -528,7 +528,7 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 	switch (msgt) {
 		case NC_MSG_UNKNOWN:
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-				DEBUG("mod_netconf: receiving rpc-reply failed");
+				ERROR("mod_netconf: receiving rpc-reply failed");
 				if (session_key != NULL) {
 					netconf_close(session_key, &err);
 				}
@@ -554,21 +554,21 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 					return create_ok();
 				case NC_REPLY_DATA:
 					if (((*data) = nc_reply_get_data(reply)) == NULL) {
-						DEBUG("mod_netconf: no data from reply");
+						ERROR("mod_netconf: no data from reply");
 						return create_error("Internal: No data from reply received.");
 					} else {
 						return NULL;
 					}
 					break;
 				case NC_REPLY_ERROR:
-					DEBUG("mod_netconf: unexpected rpc-reply (%d)", replyt);
+					ERROR("mod_netconf: unexpected rpc-reply (%d)", replyt);
 					if (data != NULL) {
 						free(*data);
 						(*data) = NULL;
 					}
 					return create_error(nc_reply_get_errormsg(reply));
 				default:
-					DEBUG("mod_netconf: unexpected rpc-reply (%d)", replyt);
+					ERROR("mod_netconf: unexpected rpc-reply (%d)", replyt);
 					if (data != NULL) {
 						free(*data);
 						(*data) = NULL;
@@ -577,7 +577,7 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 			}
 			break;
 		default:
-			DEBUG("mod_netconf: unexpected reply message received (%d)", msgt);
+			ERROR("mod_netconf: unexpected reply message received (%d)", msgt);
 			if (data != NULL) {
 				free(*data);
 				(*data) = NULL;
@@ -593,7 +593,7 @@ json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 
 	/* check requests */
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: rpc is not created");
+		ERROR("mod_netconf: rpc is not created");
 		return create_error("Internal error: RPC is not created");
 	}
 
@@ -603,7 +603,7 @@ json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 		/* process the result of the operation */
 		return netconf_test_reply(session, NULL, msgt, reply, NULL);
 	} else {
-		DEBUG("Unknown session to process.");
+		ERROR("Unknown session to process.");
 		return create_error("Internal error: Unknown session to process.");
 	}
 }
@@ -627,7 +627,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 
 	/* check requests */
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: rpc is not created");
+		ERROR("mod_netconf: rpc is not created");
 		res = create_error("Internal: RPC could not be created.");
 		data = NULL;
 		goto finished;
@@ -636,7 +636,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 	/* get non-exclusive (read) access to sessions_list (conns) */
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 		res = create_error("Internal: Lock failed.");
 		data = NULL;
 		goto finished;
@@ -654,7 +654,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 			DEBUG("UNLOCK wrlock %s", __func__);
 			if (pthread_rwlock_unlock (&session_lock) != 0) {
 
-				DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
+				ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 				res = create_error("Internal: Could not unlock.");
 				goto finished;
 			}
@@ -663,7 +663,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
 
-			DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 			res = create_error("Internal: Could not unlock.");
 		}
 
@@ -682,9 +682,9 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 		/* release lock on failure */
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
-		DEBUG("Unknown session to process.");
+		ERROR("Unknown session to process.");
 		res = create_error("Unknown session to process.");
 		data = NULL;
 	}
@@ -717,7 +717,7 @@ static char* netconf_getconfig(const char* session_key, NC_DATASTORE source, con
 	rpc = nc_rpc_getconfig (source, f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
@@ -728,7 +728,7 @@ static char* netconf_getconfig(const char* session_key, NC_DATASTORE source, con
 	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
 	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
 #endif
-		DEBUG("mod_netconf: setting withdefaults failed");
+		ERROR("mod_netconf: setting withdefaults failed");
 	}
 
 	res = netconf_op(session_key, rpc, &data);
@@ -751,7 +751,7 @@ static char* netconf_getschema(const char* session_key, const char* identifier, 
 	/* create requests */
 	rpc = nc_rpc_getschema(identifier, version, format);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
@@ -782,7 +782,7 @@ static char* netconf_get(const char* session_key, const char* filter, json_objec
 	rpc = nc_rpc_get (f);
 	nc_filter_free(f);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return (NULL);
 	}
 
@@ -790,7 +790,7 @@ static char* netconf_get(const char* session_key, const char* filter, json_objec
 	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
 	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
 	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
-		DEBUG("mod_netconf: setting withdefaults failed");
+		ERROR("mod_netconf: setting withdefaults failed");
 	}
 
 	res = netconf_op(session_key, rpc, &data);
@@ -836,7 +836,7 @@ static json_object *netconf_copyconfig(const char* session_key, NC_DATASTORE sou
 		}
 	}
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -854,7 +854,7 @@ static json_object *netconf_editconfig(const char* session_key, NC_DATASTORE sou
 	/* create requests */
 	rpc = nc_rpc_editconfig(target, source, defop, erropt, testopt, config_or_url);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -872,7 +872,7 @@ static json_object *netconf_killsession(const char* session_key, const char* sid
 	/* create requests */
 	rpc = nc_rpc_killsession(sid);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -889,7 +889,7 @@ static json_object *netconf_onlytargetop(const char* session_key, NC_DATASTORE t
 	/* create requests */
 	rpc = op_func(target);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -908,7 +908,7 @@ static json_object *netconf_deleteconfig(const char* session_key, NC_DATASTORE t
 		rpc = nc_rpc_deleteconfig(target, url);
 	}
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -935,7 +935,7 @@ static json_object *netconf_generic(const char* session_key, const char* content
 	/* create requests */
 	rpc = nc_rpc_generic(content);
 	if (rpc == NULL) {
-		DEBUG("mod_netconf: creating rpc request failed");
+		ERROR("mod_netconf: creating rpc request failed");
 		return create_error("Internal: Creating rpc request failed");
 	}
 
@@ -957,13 +957,17 @@ static json_object *netconf_generic(const char* session_key, const char* content
 void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
 #define FOREACH(I) \
-        I(NC_VERB_ERROR) I(NC_VERB_WARNING) \
-        I(NC_VERB_VERBOSE) I(NC_VERB_DEBUG)
-#define CASE(VAL) case VAL: DEBUG("%s: %s", #VAL, msg); \
+        I(NC_VERB_ERROR) I(NC_VERB_WARNING)
+
+#define CASE(VAL) case VAL: ERROR("%s: %s", #VAL, msg); \
 	break;
 
 	switch (level) {
-	FOREACH(CASE)
+	FOREACH(CASE);
+	case NC_VERB_VERBOSE:
+	case NC_VERB_DEBUG:
+		DEBUG("DEBUG: %s", msg);
+		break;
 	}
 	if (level == NC_VERB_ERROR) {
 		/* return global error */
@@ -1023,7 +1027,7 @@ char *get_framed_message(int client)
 			}
 			chunk_len_str[i++] = c;
 			if (i==11) {
-				DEBUG("Message is too long, buffer for length is not big enought!!!!");
+				ERROR("Message is too long, buffer for length is not big enought!!!!");
 				break;
 			}
 		}
@@ -1159,7 +1163,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 				nc_cpblts_add(cpblts, json_object_get_string(json_object_array_get_idx(capabilities, i)));
 			}
 		} else {
-			DEBUG("no capabilities specified");
+			ERROR("no capabilities specified");
 		}
 		json_object_put(capabilities);
 	}
@@ -1168,7 +1172,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 
 	DEBUG("host: %s, port: %s, user: %s", host, port, user);
 	if ((host == NULL) || (user == NULL)) {
-		DEBUG("Cannot connect - insufficient input.");
+		ERROR("Cannot connect - insufficient input.");
 		session_key_hash = NULL;
 	} else {
 		session_key_hash = netconf_connect(pool, host, port, user, pass, cpblts);
@@ -1187,11 +1191,11 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 			reply = json_object_new_object();
 			json_object_object_add(reply, "type", json_object_new_int(REPLY_ERROR));
 			json_object_object_add(reply, "error-message", json_object_new_string("Connecting NETCONF server failed."));
-			DEBUG("Connection failed.");
+			ERROR("Connection failed.");
 		} else {
 			/* use filled err_reply from libnetconf's callback */
 			reply = err_reply;
-			DEBUG("Connect - error from libnetconf's callback.");
+			ERROR("Connect - error from libnetconf's callback.");
 		}
 	} else {
 		/* positive reply */
@@ -1557,7 +1561,7 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_wrlock(&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		return NULL;
 	}
 
@@ -1580,12 +1584,12 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 		pthread_mutex_unlock(&locked_session->lock);
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 	} else {
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1604,7 +1608,7 @@ json_object *handle_op_info(apr_pool_t *pool, json_object *request, const char *
 
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 
 	locked_session = (struct session_with_mutex *) apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
@@ -1613,7 +1617,7 @@ json_object *handle_op_info(apr_pool_t *pool, json_object *request, const char *
 		pthread_mutex_lock(&locked_session->lock);
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		if (locked_session->hello_message != NULL) {
 			reply = locked_session->hello_message;
@@ -1625,7 +1629,7 @@ json_object *handle_op_info(apr_pool_t *pool, json_object *request, const char *
 	} else {
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1638,14 +1642,14 @@ void notification_history(time_t eventtime, const char *content)
 {
 	json_object *notif_history_array = (json_object *) pthread_getspecific(notif_history_key);
 	if (notif_history_array == NULL) {
-		DEBUG("No list of notification history found.");
+		ERROR("No list of notification history found.");
 		return;
 	}
 	DEBUG("Got notification from history %lu.", (long unsigned) eventtime);
 	pthread_mutex_lock(&json_lock);
 	json_object *notif = json_object_new_object();
 	if (notif == NULL) {
-		DEBUG("Could not allocate memory for notification (json).");
+		ERROR("Could not allocate memory for notification (json).");
 		goto failed;
 	}
 	json_object_object_add(notif, "eventtime", json_object_new_int64(eventtime));
@@ -1694,7 +1698,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		reply = create_error("Internal lock failed.");
 		goto finalize;
 	}
@@ -1705,7 +1709,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 		pthread_mutex_lock(&locked_session->lock);
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		DEBUG("creating temporal NC session.");
 		temp_session = nc_session_connect_channel(locked_session->session, NULL);
@@ -1739,7 +1743,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 			json_object *notif_history_array = json_object_new_array();
 			pthread_mutex_unlock(&json_lock);
 			if (pthread_setspecific(notif_history_key, notif_history_array) != 0) {
-				DEBUG("notif_history: cannot set thread-specific hash value.");
+				ERROR("notif_history: cannot set thread-specific hash value.");
 			}
 
 			ncntf_dispatch_receive(temp_session, notification_history);
@@ -1764,7 +1768,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 	} else {
 		DEBUG("UNLOCK wrlock %s", __func__);
 		if (pthread_rwlock_unlock(&session_lock) != 0) {
-			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+			ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 		}
 		reply = create_error("Invalid session identifier.");
 	}
@@ -1864,7 +1868,6 @@ void * thread_routine (void * arg)
 
 		if (status == 0 || (status == -1 && (errno == EAGAIN || (errno == EINTR && isterminated == 0)))) {
 			/* poll was interrupted - check if the isterminated is set and if not, try poll again */
-			//DEBUG("poll interrupted");
 			continue;
 		} else if (status < 0) {
 			/* 0:  poll time outed
@@ -1872,7 +1875,6 @@ void * thread_routine (void * arg)
 			 * -1: poll failed
 			 *     something wrong happend, close this socket and wait for another request
 			 */
-			//DEBUG("poll failed, status %d(%d: %s)", status, errno, strerror(errno));
 			close(client);
 			break;
 		}
@@ -1883,7 +1885,6 @@ void * thread_routine (void * arg)
 		/* if nothing to read and POLLHUP (EOF) or POLLERR set */
 		if ((fds.revents & POLLHUP) || (fds.revents & POLLERR)) {
 			/* close client's socket (it's probably already closed by client */
-			//DEBUG("socket error (%d)", fds.revents);
 			close(client);
 			break;
 		}
@@ -1897,7 +1898,7 @@ void * thread_routine (void * arg)
 			pthread_mutex_lock(&json_lock);
 			request = json_tokener_parse_verbose(buffer, &jerr);
 			if (jerr != json_tokener_success) {
-				DEBUG("JSON parsing error");
+				ERROR("JSON parsing error");
 				pthread_mutex_unlock(&json_lock);
 				continue;
 			}
@@ -2079,7 +2080,7 @@ send_reply:
 				pthread_mutex_unlock(&json_lock);
 				clean_err_reply();
 			} else {
-				DEBUG("Reply is NULL, shouldn't be...");
+				ERROR("Reply is NULL, shouldn't be...");
 				continue;
 			}
 		}
@@ -2113,7 +2114,7 @@ static void close_all_nc_sessions(apr_pool_t *p)
 	/* get exclusive access to sessions_list (conns) */
 	DEBUG("LOCK wrlock %s", __func__);
 	if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
-		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
+		ERROR("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
 	for (hi = apr_hash_first(p, netconf_sessions_list); hi; hi = apr_hash_next(hi)) {
@@ -2134,7 +2135,7 @@ static void close_all_nc_sessions(apr_pool_t *p)
 	/* get exclusive access to sessions_list (conns) */
 	DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }
 
@@ -2150,7 +2151,6 @@ static void check_timeout_and_close(apr_pool_t *p)
 	int ret;
 
 	/* get exclusive access to sessions_list (conns) */
-//DEBUG("LOCK wrlock %s", __func__);
 	if ((ret = pthread_rwlock_wrlock(&session_lock)) != 0) {
 		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
@@ -2165,26 +2165,22 @@ static void check_timeout_and_close(apr_pool_t *p)
 		if (ns == NULL) {
 			continue;
 		}
-//DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&swm->lock);
 		if ((current_time - swm->last_activity) > apr_time_from_sec(ACTIVITY_TIMEOUT)) {
 			DEBUG("Closing NETCONF session (%s).", hashed_key);
 			/* remove session from the active sessions list */
 			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
-//DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&swm->lock);
 
 			/* close_and_free_session handles locking on its own */
 			close_and_free_session(swm);
 		} else {
-//DEBUG("UNLOCK mutex %s", __func__);
 			pthread_mutex_unlock(&swm->lock);
 		}
 	}
 	/* get exclusive access to sessions_list (conns) */
-//DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock(&session_lock) != 0) {
-		DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 }
 
@@ -2228,12 +2224,12 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	if (strlen(SU_GROUP) > 0) {
 		struct group *g = getgrnam(SU_GROUP);
 		if (g == NULL) {
-			DEBUG("GID (%s) was not found.", SU_GROUP);
+			ERROR("GID (%s) was not found.", SU_GROUP);
 			return;
 		}
 		if (setgid(g->gr_gid) != 0) {
 
-			DEBUG("Switching to %s GID failed. (%s)", SU_GROUP, strerror(errno));
+			ERROR("Switching to %s GID failed. (%s)", SU_GROUP, strerror(errno));
 			return;
 		}
 	}
@@ -2244,11 +2240,11 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	if (strlen(SU_USER) > 0) {
 		struct passwd *p = getpwnam(SU_USER);
 		if (p == NULL) {
-			DEBUG("UID (%s) was not found.", SU_USER);
+			ERROR("UID (%s) was not found.", SU_USER);
 			return;
 		}
 		if (setuid(p->pw_uid) != 0) {
-			DEBUG("Switching to UID %s failed. (%s)", SU_USER, strerror(errno));
+			ERROR("Switching to UID %s failed. (%s)", SU_USER, strerror(errno));
 			return;
 		}
 	}
@@ -2260,7 +2256,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	if (server != NULL) {
 		cfg = ap_get_module_config(server->module_config, &netconf_module);
 		if (cfg == NULL) {
-			DEBUG("Getting mod_netconf configuration failed");
+			ERROR("Getting mod_netconf configuration failed");
 			return;
 		}
 		sockname = cfg->sockname;
@@ -2273,7 +2269,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	/* create listening UNIX socket to accept incoming connections */
 	if ((lsock = socket(PF_UNIX, SOCK_STREAM, 0)) == -1) {
-		DEBUG("Creating socket failed (%s)", strerror(errno));
+		ERROR("Creating socket failed (%s)", strerror(errno));
 		goto error_exit;
 	}
 
@@ -2283,15 +2279,15 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	if (bind(lsock, (struct sockaddr *) &local, len) == -1) {
 		if (errno == EADDRINUSE) {
-			DEBUG("mod_netconf socket address already in use");
+			ERROR("mod_netconf socket address already in use");
 			goto error_exit;
 		}
-		DEBUG("Binding socket failed (%s)", strerror(errno));
+		ERROR("Binding socket failed (%s)", strerror(errno));
 		goto error_exit;
 	}
 
 	if (listen(lsock, MAX_SOCKET_CL) == -1) {
-		DEBUG("Setting up listen socket failed (%s)", strerror(errno));
+		ERROR("Setting up listen socket failed (%s)", strerror(errno));
 		goto error_exit;
 	}
 	chmod(sockname, S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
@@ -2311,7 +2307,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		}
 	}
 	if (chown(sockname, user, group) == -1) {
-		DEBUG("Chown on socket file failed (%s).", strerror(errno));
+		ERROR("Chown on socket file failed (%s).", strerror(errno));
 	}
 
 	/* prepare internal lists */
@@ -2319,7 +2315,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	#ifdef WITH_NOTIFICATIONS
 	if (notification_init(pool, server) == -1) {
-		DEBUG("libwebsockets initialization failed");
+		ERROR("libwebsockets initialization failed");
 		use_notifications = 0;
 	} else {
 		use_notifications = 1;
@@ -2343,18 +2339,17 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	pthread_rwlockattr_setpshared(&lock_attrs, PTHREAD_PROCESS_PRIVATE);
 	/* create rw lock */
 	if (pthread_rwlock_init(&session_lock, &lock_attrs) != 0) {
-		DEBUG("Initialization of mutex failed: %d (%s)", errno, strerror(errno));
+		ERROR("Initialization of mutex failed: %d (%s)", errno, strerror(errno));
 		goto error_exit;
 	}
 	pthread_mutex_init(&ntf_history_lock, NULL);
 	pthread_mutex_init(&json_lock, NULL);
-	DEBUG("init of notif_history_key.");
+	DEBUG("Initialization of notification history.");
 	if (pthread_key_create(&notif_history_key, NULL) != 0) {
-		DEBUG("init of notif_history_key failed");
+		ERROR("Initialization of notification history failed.");
 	}
-	DEBUG("init of err_reply_key.");
 	if (pthread_key_create(&err_reply_key, NULL) != 0) {
-		DEBUG("init of err_reply_key failed");
+		ERROR("Initialization of reply key failed.");
 	}
 
 	fcntl(lsock, F_SETFL, fcntl(lsock, F_GETFL, 0) | O_NONBLOCK);
@@ -2362,9 +2357,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		gettimeofday(&tv, NULL);
 		timediff = (unsigned int)tv.tv_sec - olds;
 		#ifdef WITH_NOTIFICATIONS
-		if (timediff > 60) {
-			DEBUG("handling notifications");
-		}
 		if (use_notifications == 1) {
 			notification_handle();
 		}
@@ -2375,10 +2367,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 		/* open incoming connection if any */
 		len = sizeof(remote);
-		if (((unsigned int)tv.tv_sec - olds) > 60) {
-			DEBUG("accepting another client");
-			olds = tv.tv_sec;
-		}
 		client = accept(lsock, (struct sockaddr *) &remote, &len);
 		if (client == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
 			apr_sleep(SLEEP_TIME);
@@ -2386,7 +2374,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		} else if (client == -1 && (errno == EINTR)) {
 			continue;
 		} else if (client == -1) {
-			DEBUG("Accepting mod_netconf client connection failed (%s)", strerror(errno));
+			ERROR("Accepting mod_netconf client connection failed (%s)", strerror(errno));
 			continue;
 		}
 
@@ -2401,7 +2389,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 		/* start new thread. It will serve this particular request and then terminate */
 		if ((ret = pthread_create (&ptids[pthread_count], NULL, thread_routine, (void*)arg)) != 0) {
-			DEBUG("Creating POSIX thread failed: %d\n", ret);
+			ERROR("Creating POSIX thread failed: %d\n", ret);
 		} else {
 			DEBUG("Thread %lu created", ptids[pthread_count]);
 			pthread_count++;
@@ -2511,11 +2499,11 @@ static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
 			apr_pool_note_subprocess(config->pool, config->forkproc, APR_KILL_AFTER_TIMEOUT);
 			break;
 		default:
-			DEBUG("apr_proc_fork() failed");
+			ERROR("apr_proc_fork() failed");
 			break;
 		}
 	} else {
-		DEBUG("mod_netconf misses configuration structure");
+		ERROR("mod_netconf misses configuration structure");
 	}
 
 	return OK;

@@ -98,11 +98,23 @@ json_object *create_ok();
 
 extern server_rec *http_server;
 #ifndef HTTPD_INDEPENDENT
+# define APLOGDEBUG(...) ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, __VA_ARGS__);
 # define APLOGERROR(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, __VA_ARGS__);
 #else
+# define APLOGDEBUG(...)
 # define APLOGERROR(...)
 #endif
+
 #define DEBUG(...) do { \
+	if (http_server != NULL) { \
+		APLOGDEBUG(__VA_ARGS__); \
+	} else { \
+		fprintf(stderr, __VA_ARGS__); \
+		fprintf(stderr, "\n"); \
+	} \
+} while (0);
+
+#define ERROR(...) do { \
 	if (http_server != NULL) { \
 		APLOGERROR(__VA_ARGS__); \
 	} else { \

@@ -121,68 +121,12 @@ static int callback_http(struct libwebsocket_context *context,
 	char client_ip[128];
 	char buf[256];
 	int n, m;
-	unsigned char *p;
 	static unsigned char buffer[4096];
-	struct stat stat_buf;
 	struct per_session_data__http *pss = (struct per_session_data__http *)user;
 	struct libwebsocket_pollargs *pa = (struct libwebsocket_pollargs *) in;
 
 	switch (reason) {
 	case LWS_CALLBACK_HTTP:
-
-		/* check for the "send a big file by hand" example case */
-
-		if (!strcmp((const char *)in, "/leaf.jpg")) {
-			char leaf_path[1024];
-			snprintf(leaf_path, sizeof(leaf_path), "%s/leaf.jpg", resource_path);
-
-			/* well, let's demonstrate how to send the hard way */
-
-			p = buffer;
-
-			pss->fd = open(leaf_path, O_RDONLY);
-
-			if (pss->fd < 0)
-				return -1;
-
-			fstat(pss->fd, &stat_buf);
-
-			/*
-			 * we will send a big jpeg file, but it could be
-			 * anything.  Set the Content-Type: appropriately
-			 * so the browser knows what to do with it.
-			 */
-
-			p += sprintf((char *)p,
-				"HTTP/1.0 200 OK\x0d\x0a"
-				"Server: libwebsockets\x0d\x0a"
-				"Content-Type: image/jpeg\x0d\x0a"
-					"Content-Length: %u\x0d\x0a\x0d\x0a",
-					(unsigned int)stat_buf.st_size);
-
-			/*
-			 * send the http headers...
-			 * this won't block since it's the first payload sent
-			 * on the connection since it was established
-			 * (too small for partial)
-			 */
-
-			n = libwebsocket_write(wsi, buffer,
-				   p - buffer, LWS_WRITE_HTTP);
-
-			if (n < 0) {
-				close(pss->fd);
-				return -1;
-			}
-			/*
-			 * book us a LWS_CALLBACK_HTTP_WRITEABLE callback
-			 */
-			libwebsocket_callback_on_writable(context, wsi);
-			break;
-		}
-
-		/* if not, send a file the easy way */
-
 		for (n = 0; n < (sizeof(whitelist) / sizeof(whitelist[0]) - 1); n++)
 			if (in && strcmp((const char *)in, whitelist[n].urlpath) == 0)
 				break;
@@ -306,51 +250,6 @@ bail:
 	return 0;
 }
 
-/**
- * this is just an example of parsing handshake headers, you don't need this
- * in your code unless you will filter allowing connections by the header
- * content
- */
-//static void dump_handshake_info(struct libwebsocket *wsi)
-//{
-//	int n;
-//	static const char *token_names[WSI_TOKEN_COUNT] = {
-//		/*[WSI_TOKEN_GET_URI]		=*/ "GET URI",
-//		/*[WSI_TOKEN_HOST]		=*/ "Host",
-//		/*[WSI_TOKEN_CONNECTION]	=*/ "Connection",
-//		/*[WSI_TOKEN_KEY1]		=*/ "key 1",
-//		/*[WSI_TOKEN_KEY2]		=*/ "key 2",
-//		/*[WSI_TOKEN_PROTOCOL]		=*/ "Protocol",
-//		/*[WSI_TOKEN_UPGRADE]		=*/ "Upgrade",
-//		/*[WSI_TOKEN_ORIGIN]		=*/ "Origin",
-//		/*[WSI_TOKEN_DRAFT]		=*/ "Draft",
-//		/*[WSI_TOKEN_CHALLENGE]		=*/ "Challenge",
-//
-//		/* new for 04 */
-//		/*[WSI_TOKEN_KEY]		=*/ "Key",
-//		/*[WSI_TOKEN_VERSION]		=*/ "Version",
-//		/*[WSI_TOKEN_SWORIGIN]		=*/ "Sworigin",
-//
-//		/* new for 05 */
-//		/*[WSI_TOKEN_EXTENSIONS]	=*/ "Extensions",
-//
-//		/* client receives these */
-//		/*[WSI_TOKEN_ACCEPT]		=*/ "Accept",
-//		/*[WSI_TOKEN_NONCE]		=*/ "Nonce",
-//		/*[WSI_TOKEN_HTTP]		=*/ "Http",
-//		/*[WSI_TOKEN_MUXURL]	=*/ "MuxURL",
-//	};
-//	char buf[256];
-//
-//	for (n = 0; n < WSI_TOKEN_COUNT; n++) {
-//		if (!lws_hdr_total_length(wsi, n))
-//			continue;
-//
-//		//lws_hdr_copy(wsi, buf, sizeof buf, n);
-//
-//		//fprintf(stderr, "    %s = %s\n", token_names[n], buf);
-//	}
-//}
 
 /* dumb_increment protocol */
 
@@ -389,12 +288,12 @@ static int send_recv_process(struct nc_session *session, const char* operation, 
 	switch (nc_session_send_recv(session, rpc, &reply)) {
 	case NC_MSG_UNKNOWN:
 		if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
-			DEBUG("notifications: receiving rpc-reply failed.");
+			ERROR("notifications: receiving rpc-reply failed.");
 			//cmd_disconnect(NULL);
 			ret = EXIT_FAILURE;
 			break;
 		}
-		DEBUG("notifications: Unknown error occurred.");
+		ERROR("notifications: Unknown error occurred.");
 		ret = EXIT_FAILURE;
 		break;
 	case NC_MSG_NONE:
@@ -446,27 +345,27 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	session_hash = pthread_getspecific(thread_key);
 	DEBUG("notification: fileprint getspecific (%s)", session_hash);
 	if (pthread_rwlock_wrlock(&session_lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("notifications: Error while locking rwlock");
 		return;
 	}
 	DEBUG("Get session with mutex from key %s.", session_hash);
 	target_session = get_ncsession_from_key(session_hash);
 	if (target_session == NULL) {
-		DEBUG("no session found last_session_key (%s)", session_hash);
+		ERROR("notifications: no session found last_session_key (%s)", session_hash);
 		goto unlock_glob;
 	}
 	if (pthread_mutex_lock(&target_session->lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("notifications: Error while locking rwlock");
 	}
 
 	if (target_session->notifications == NULL) {
-		DEBUG("target_session->notifications is NULL");
+		ERROR("notifications: target_session->notifications is NULL");
 		goto unlock_all;
 	}
 	DEBUG("notification: ready to push to notifications queue");
 	ntf = (notification_t *) apr_array_push(target_session->notifications);
 	if (ntf == NULL) {
-		DEBUG("Failed to allocate element ");
+		ERROR("notifications: Failed to allocate element ");
 		goto unlock_all;
 	}
 	ntf->eventtime = eventtime;
@@ -476,11 +375,11 @@ static void notification_fileprint (time_t eventtime, const char* content)
 
 unlock_all:
 	if (pthread_mutex_unlock(&target_session->lock) != 0) {
-		DEBUG("Error while unlocking rwlock");
+		ERROR("notifications: Error while unlocking rwlock");
 	}
 unlock_glob:
 	if (pthread_rwlock_unlock(&session_lock) != 0) {
-		DEBUG("Error while locking rwlock");
+		ERROR("notifications: Error while locking rwlock");
 	}
 }
 
@@ -495,7 +394,7 @@ void* notification_thread(void* arg)
 
 	/* store hash identification of netconf session for notifications printing callback */
 	if (pthread_setspecific(thread_key, config->session_hash) != 0) {
-		DEBUG("notifications: cannot set thread-specific hash value.");
+		ERROR("notifications: cannot set thread-specific hash value.");
 	}
 
 	DEBUG("notifications: dispatching");
@@ -525,7 +424,7 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	DEBUG("notif_subscribe");
 	if (locked_session == NULL) {
 		DEBUG("notifications: no locked_session was given.");
-		DEBUG("Close notification client");
+		/* Close notification client */
 		return -1;
 	}
 
@@ -539,18 +438,18 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	DEBUG("notifications: history: %u %u", (unsigned int) start, (unsigned int) stop);
 
 	if (session == NULL) {
-		DEBUG("notifications: NETCONF session not established.");
+		ERROR("notifications: NETCONF session not established.");
 		goto operation_failed;
 	}
 
 	/* check if notifications are allowed on this session */
 	if (nc_session_notif_allowed(session) == 0) {
-		DEBUG("notifications: Notification subscription is not allowed on this session.");
+		ERROR("notifications: Notification subscription is not allowed on this session.");
 		goto operation_failed;
 	}
 	/* check times */
 	if (start != -1 && stop != -1 && start > stop) {
-		DEBUG("notifications: Subscription start time must be lower than the end time.");
+		ERROR("notifications: Subscription start time must be lower than the end time.");
 		goto operation_failed;
 	}
 
@@ -559,21 +458,21 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	rpc = nc_rpc_subscribe(stream, filter, (start_time == -1)?NULL:&start, (stop_time == 0)?NULL:&stop);
 	nc_filter_free(filter);
 	if (rpc == NULL) {
-		DEBUG("notifications: creating an rpc request failed.");
+		ERROR("notifications: creating an rpc request failed.");
 		goto operation_failed;
 	}
 
 	DEBUG("Send NC subscribe.");
 	create_err_reply_p();
 	if (send_recv_process(session, "subscribe", rpc) != 0) {
-		DEBUG("Subscription RPC failed.");
+		ERROR("Subscription RPC failed.");
 		goto operation_failed;
 	}
 
 	GETSPEC_ERR_REPLY
 	if (err_reply != NULL) {
                 free_err_reply();
-                DEBUG("RPC-Error received and cleaned, because we can't send it anywhere.");
+                ERROR("RPC-Error received and cleaned, because we can't send it anywhere.");
                 goto operation_failed;
 	}
 
@@ -582,6 +481,10 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
 	DEBUG("Create config for notification_thread.");
 	tconfig = malloc(sizeof(struct ntf_thread_config));
+	if (tconfig == NULL) {
+		ERROR("notifications: Allocation failed.");
+		goto operation_failed;
+	}
 	tconfig->session = session;
 	tconfig->session_hash = strdup(session_hash);
 	DEBUG("notifications: creating libnetconf notification thread (%s).", tconfig->session_hash);
@@ -589,7 +492,7 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 	pthread_mutex_unlock(&locked_session->lock);
 	DEBUG("Create notification_thread.");
 	if (pthread_create(&thread, NULL, notification_thread, tconfig) != 0) {
-		DEBUG("notifications: creating a thread for receiving notifications failed");
+		ERROR("notifications: creating a thread for receiving notifications failed");
 		return -1;
 	}
 	pthread_detach(thread);
@@ -844,7 +747,7 @@ int notification_init(apr_pool_t * pool, server_rec * server)
 	pollfds = malloc(max_poll_elements * sizeof (struct pollfd));
 	fd_lookup = malloc(max_poll_elements * sizeof (int));
 	if (pollfds == NULL || fd_lookup == NULL) {
-		DEBUG("Out of memory pollfds=%d\n", max_poll_elements);
+		ERROR("notifications: Out of memory pollfds=%d\n", max_poll_elements);
 		return -1;
 	}
 
@@ -868,9 +771,8 @@ int notification_init(apr_pool_t * pool, server_rec * server)
 		return -1;
 	}
 
-	DEBUG("notifications: init of pthread_key_create.");
 	if (pthread_key_create(&thread_key, NULL) != 0) {
-		DEBUG("notifications: pthread_key_create failed");
+		ERROR("notifications: pthread_key_create failed");
 	}
 	return 0;
 }
