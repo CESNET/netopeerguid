@@ -779,7 +779,9 @@ int notification_init(apr_pool_t * pool, server_rec * server)
 
 void notification_close()
 {
-	libwebsocket_context_destroy(context);
+	if (context) {
+		libwebsocket_context_destroy(context);
+	}
 	free(pollfds);
 	free(fd_lookup);
 
