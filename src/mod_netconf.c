@@ -357,6 +357,29 @@ void free_err_reply()
  */
 
 /**
+ * \brief Send RPC and wait for reply with timeout.
+ *
+ * \param[in] session libnetconf session
+ * \param[in] rpc     prepared RPC message
+ * \param[in] timeout timeout in miliseconds, -1 for blocking, 0 for non-blocking
+ * \param[out] reply  reply from the server
+ * \return Value from nc_session_recv_reply() or NC_MSG_UNKNOWN when send_rpc() fails.
+ * On success, it returns NC_MSG_REPLY.
+ */
+NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
+					   int timeout, nc_reply **reply)
+{
+	const nc_msgid msgid = NULL;
+	NC_MSG_TYPE ret = NC_MSG_UNKNOWN;
+	msgid = nc_session_send_rpc(session, rpc);
+	if (msgid == NULL) {
+		return ret;
+	}
+	ret = nc_session_recv_reply(session, timeout, reply);
+	return ret;
+}
+
+/**
  * \brief Connect to NETCONF server
  *
  * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
@@ -599,7 +622,7 @@ json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 
 	if (session != NULL) {
 		/* send the request and get the reply */
-		msgt = nc_session_send_recv(session, rpc, &reply);
+		msgt = netconf_send_recv_timed(session, rpc, 5000, &reply);
 		/* process the result of the operation */
 		return netconf_test_reply(session, NULL, msgt, reply, NULL);
 	} else {
@@ -670,7 +693,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 		locked_session->last_activity = apr_time_now();
 
 		/* send the request and get the reply */
-		msgt = nc_session_send_recv(session, rpc, &reply);
+		msgt = netconf_send_recv_timed(session, rpc, 5000, &reply);
 
 		/* first release exclusive lock for this session */
 		DEBUG("UNLOCK mutex %s", __func__);

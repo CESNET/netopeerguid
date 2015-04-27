@@ -150,5 +150,8 @@ void create_err_reply_p();
 void clean_err_reply();
 void free_err_reply();
 
+NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
+					   int timeout, nc_reply **reply);
+
 #endif
 
