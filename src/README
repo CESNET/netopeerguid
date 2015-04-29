@@ -6,16 +6,36 @@ How To Setup Apache Server
 $ make
 # make install
 
-- Add following lines into the (appropriate parts of the ) Apache configuration:
+- Apache module should be installed by now, the following line is added into
+server's configuration:
 LoadModule netconf_module                 /usr/lib64/apache2/mod_netconf.so
 
 - Start Apache
 
-- For testing, you can run test-client
-  - run under the same user as Apache, or change access rights of the
-    communication socket (/tmp/mod_netconf.sock) to allow writing.
+- mod_netconf runs as the same user as Apache. It listens on the UNIX socket
+(/var/run/mod_netconf.sock) for communication with frontend and on TCP socket 8080
+for notifications over WebSocket.
 
-    
+If there is any problem with connection to the UNIX socket, please check file permissions.
+
+Alternatively, there is a possibility to run binary 'webgui-backend'. It is a standalone
+program independent on Apache. However, it still uses libapr1 etc.
+
+List of dependencies
+--------------------
+
+* json-c
+* libapr-1
+* libapr-util-1
+* libnetconf
+* libxml-2.0
+* httpd
+
+(with development packages)
+
+Optionally: libwebsockets
+
+
 mod_netconf Message Format
 --------------------------
 
