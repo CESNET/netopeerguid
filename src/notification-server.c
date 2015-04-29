@@ -133,7 +133,7 @@ static int callback_http(struct libwebsocket_context *context,
 
 		sprintf(buf, "%s%s", resource_path, whitelist[n].urlpath);
 
-		if (libwebsockets_serve_http_file(context, wsi, buf, whitelist[n].mimetype, NULL))
+		if (libwebsockets_serve_http_file(context, wsi, buf, whitelist[n].mimetype, NULL, 0))
 			return -1; /* through completion or error, close the socket */
 
 		/*

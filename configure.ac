@@ -67,13 +67,6 @@ AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
 AC_CHECK_PROG(HTTPD, [httpd], [yes], [""])
 AC_PATH_PROGS(APACHECTL, apachectl apache2ctl, no, [$PATH:/usr/sbin])
 
-if test "x$APACHECTL" != xno; then
-	AC_MSG_CHECKING([for php5_module in apache])
-	$APACHECTL -M 2> /dev/null | grep php5_module > /dev/null && AC_MSG_RESULT([yes]) || AC_MSG_ERROR(["php5_module was not found."])
-else
-AC_MSG_ERROR([apachectl was not found])
-fi
-
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild, [""])
 RPM_RELEASE=1
@@ -85,7 +78,6 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
 PKG_CHECK_MODULES([json], [json])
-PKG_CHECK_MODULES([websockets], [libwebsockets])
 PKG_CHECK_MODULES([apr], [apr-1])
 PKG_CHECK_MODULES([aprutil], [apr-util-1])
 PKG_CHECK_MODULES([netconf], [libnetconf])
@@ -99,13 +91,13 @@ AX_PTHREAD([CC="$PTHREAD_CC"],
 
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],
-AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
-[AC_CHECK_LIB([websockets], [libwebsocket_create_context])
-CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
-LIBS="$LIBS $websockets_LIBS"]),
-[AC_CHECK_LIB([websockets], [libwebsocket_create_context])
-CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
-LIBS="$LIBS $websockets_LIBS"])
+[AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
+[PKG_CHECK_MODULES([websockets], [libwebsockets],
+[CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
+LIBS="$LIBS $websockets_LIBS"])])],
+[PKG_CHECK_MODULES([websockets], [libwebsockets],
+[CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
+LIBS="$LIBS $websockets_LIBS"])])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdlib.h string.h sys/socket.h sys/time.h unistd.h])
