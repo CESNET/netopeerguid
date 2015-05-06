@@ -375,7 +375,17 @@ NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
 	if (msgid == NULL) {
 		return ret;
 	}
-	ret = nc_session_recv_reply(session, timeout, reply);
+	do {
+		ret = nc_session_recv_reply(session, timeout, reply);
+		if (ret == NC_MSG_HELLO) {
+			ERROR("<hello> received instead reply, it will be lost.");
+			nc_reply_free(*reply);
+		}
+		if (ret == NC_MSG_WOULDBLOCK) {
+			ERROR("Timeout for receiving RPC reply expired.");
+			break;
+		}
+	} while (ret == NC_MSG_HELLO || ret == NC_MSG_NOTIFICATION);
 	return ret;
 }
 
