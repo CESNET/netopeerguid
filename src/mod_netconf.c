@@ -159,52 +159,44 @@ static char* gen_ncsession_hash( const char* hostname, const char* port, const c
 	return (hash);
 }
 
-int netconf_callback_ssh_hostkey_check (const char* hostname, LIBSSH2_SESSION *session)
+int netconf_callback_ssh_hostkey_check(const char* hostname, ssh_session session)
 {
 	/* always approve */
 	return (EXIT_SUCCESS);
 }
 
-char* netconf_callback_sshauth_password (const char* username, const char* hostname)
+char *netconf_callback_sshauth_passphrase(const char *username, const char *hostname, const char *priv_key_file)
 {
-	char* buf;
-
-	buf = malloc ((strlen(password) + 1) * sizeof(char));
-	apr_cpystrn(buf, password, strlen(password) + 1);
-
+	char *buf;
+	buf = strdup(password);
 	return (buf);
 }
 
-void netconf_callback_sshauth_interactive (const char* name,
-		int name_len,
-		const char* instruction,
-		int instruction_len,
-		int num_prompts,
-		const LIBSSH2_USERAUTH_KBDINT_PROMPT* prompts,
-		LIBSSH2_USERAUTH_KBDINT_RESPONSE* responses,
-		void** abstract)
+char *netconf_callback_sshauth_password(const char* username, const char* hostname)
 {
-	int i;
-
-	for (i=0; i<num_prompts; i++) {
-		responses[i].text = malloc ((strlen(password) + 1) * sizeof(char));
-		apr_cpystrn(responses[i].text, password, strlen(password) + 1);
-		responses[i].length = strlen(responses[i].text) + 1;
-	}
-
-	return;
+	char *buf;
+	buf = strdup(password);
+	return (buf);
 }
 
-void netconf_callback_error_process(const char* tag,
-		const char* type,
-		const char* severity,
-		const char* apptag,
-		const char* path,
-		const char* message,
-		const char* attribute,
-		const char* element,
-		const char* ns,
-		const char* sid)
+char *netconf_callback_sshauth_interactive(const char *name, const char *instruction,
+                                           const char *prompt, int echo)
+{
+	char *buf;
+	buf = strdup(password);
+	return (buf);
+}
+
+void netconf_callback_error_process(const char *tag,
+		const char *type,
+		const char *severity,
+		const char *apptag,
+		const char *path,
+		const char *message,
+		const char *attribute,
+		const char *element,
+		const char *ns,
+		const char *sid)
 {
 	json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
 	if (err_reply_p == NULL) {
@@ -367,7 +359,7 @@ void free_err_reply()
  * On success, it returns NC_MSG_REPLY.
  */
 NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
-					   int timeout, nc_reply **reply)
+				   int timeout, nc_reply **reply)
 {
 	const nc_msgid msgid = NULL;
 	NC_MSG_TYPE ret = NC_MSG_UNKNOWN;
@@ -2361,6 +2353,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	nc_callback_ssh_host_authenticity_check(netconf_callback_ssh_hostkey_check);
 	nc_callback_sshauth_interactive(netconf_callback_sshauth_interactive);
 	nc_callback_sshauth_password(netconf_callback_sshauth_password);
+	nc_callback_sshauth_passphrase(netconf_callback_sshauth_passphrase);
 	nc_callback_error_reply(netconf_callback_error_process);
 
 	/* disable publickey authentication */

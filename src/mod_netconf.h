@@ -53,6 +53,7 @@
 #include <http_config.h>
 #include <apr_hash.h>
 #include <json/json.h>
+#include <libssh2.h>
 
 /**
  * \brief Check if pointer is not NULL, free memory and set pointer to NULL
