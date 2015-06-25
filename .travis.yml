@@ -1,0 +1,10 @@
+language: c
+compiler:
+  - gcc
+  - clang
+os:
+  - linux
+before_install: ./install-dependencies.sh
+
+script: ./bootstrap.sh && ./configure && make
+
