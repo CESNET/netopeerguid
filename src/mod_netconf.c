@@ -59,8 +59,6 @@
 #include <pthread.h>
 #include <ctype.h>
 
-#include <libyang/libyang.h>
-
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>
 
