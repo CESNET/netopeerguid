@@ -2184,7 +2184,6 @@ static void forked_proc(void)
 	pthread_t * ptids = calloc(1, sizeof(pthread_t));
 	struct timespec maxtime;
 	pthread_rwlockattr_t lock_attrs;
-	char *sockname = NULL;
 	#ifdef WITH_NOTIFICATIONS
 	char use_notifications = 0;
 	#endif
