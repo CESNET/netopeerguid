@@ -38,30 +38,6 @@ if test "x$CHOWN_GROUP" == x; then
 fi
 AC_SUBST([CHOWN_GROUP])
 
-AC_ARG_VAR(httpdmoduledir, [Installation directory for Apache module, leave unset to use Apache default.])
-if test "x$httpdmoduledir" != x; then
-	httpdmoduledir="${prefix}/${httpdmoduledir}"
-fi
-AC_SUBST(httpdmoduledir)
-
-AM_CONDITIONAL([MANUAL_CONFD], [test "x$httpdconfddir" != x])
-if test "x$httpdconfddir" == x; then
-	httpdconfddir="/etc/httpd/conf.d"
-else
-	httpdconfddir="${prefix}/${httpdconfddir}"
-fi
-AC_ARG_VAR(httpdconfddir, [Directory for Apache configuration files [/etc/httpd/conf.d]])
-AC_SUBST(httpdconfddir)
-
-# Checks for programs.
-AC_ARG_WITH(apxs, AC_HELP_STRING([--with-apxs=NAME],[name of the apxs executable [[apxs]]]), [APXS="$with_apxs"])
-if test -z "${APXS}"; then
-AC_PATH_PROGS(APXS, [apxs2 apxs], [no], [$PATH:/usr/sbin:/usr/local/apache2/bin])
-else
-AC_MSG_ERROR([Apxs for Apache module compilation and installation was not found.])
-fi
-
-
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
 AC_CHECK_PROG(HTTPD, [httpd], [yes], [""])
@@ -78,16 +54,12 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
 PKG_CHECK_MODULES([json], [json])
-PKG_CHECK_MODULES([apr], [apr-1])
-PKG_CHECK_MODULES([aprutil], [apr-util-1])
 PKG_CHECK_MODULES([netconf], [libnetconf])
 PKG_CHECK_MODULES([xml], [libxml-2.0])
-CFLAGS="$json_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
-LIBS="$json_LIBS $netconf_LIBS $xml_LIBS"
+AX_PTHREAD([CC="$PTHREAD_CC"], [AC_MSG_ERROR([pthread not found])])
+CFLAGS="-Wall -Wextra $json_CFLAGS $netconf_CFLAGS $xml_CFLAGS $PTHREAD_CFLAGS"
+LIBS="$json_LIBS $netconf_LIBS $xml_LIBS $PTHREAD_LIBS"
 CPPFLAGS="$xml_CPPFLAGS"
-
-AX_PTHREAD([CC="$PTHREAD_CC"],
-	    [AC_MSG_ERROR([pthread not found])])
 
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],
@@ -115,7 +87,6 @@ AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 AC_CONFIG_FILES([Makefile
                 config.h
 		mod_netconf.spec
-                conf.d/Makefile
 		src/Makefile
 		])
 AC_OUTPUT
@@ -132,7 +103,7 @@ echo
 echo "Documentation..........: ${build_doc}"
 echo
 echo "Compilation............: make (or gmake)"
-echo "  asxs.................: $ASXS"
+echo "  CC...................: $CC"
 echo "  LIBS.................: $LIBS"
 echo "  CFLAGS...............: $CFLAGS"
 echo
@@ -141,8 +112,6 @@ echo "  prefix...............: $prefix"
 echo "  python module dir....: $pyplugindir"
 echo "  webgui dir...........: $webguidir"
 echo "  webgui name..........: $webguiname"
-echo "  httpdmoduledir.......: $(test -z "$httpdmoduledir" && echo "Apache default path" || echo "$httpdmoduledir")"
-echo "  httpdconfddir........: $(test -z "$httpdconfddir" && echo "Apache default path" || echo "$httpdconfddir")"
 echo "Su user for process:...............: $SU_USER"
 echo "Su group for process:..............: $SU_GROUP"
 echo "Chown user for sock file:...............: $CHOWN_USER"

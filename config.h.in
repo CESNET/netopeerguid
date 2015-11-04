@@ -1,6 +1,8 @@
 #ifndef MOD_NETCONF_CONFIG_H
 #define MOD_NETCONF_CONFIG_H
 
+#define NOTIFICATION_QUEUE_SIZE 10
+
 /** username for change of UID of process */
 #define SU_USER "@SU_USER@"
 

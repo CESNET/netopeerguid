@@ -29,18 +29,15 @@
 #include <fcntl.h>
 #include <assert.h>
 #include <pthread.h>
+#include <errno.h>
 #include <libnetconf.h>
 #include <libwebsockets.h>
+
 #include "notification_module.h"
 #include "mod_netconf.h"
+#include "../config.h"
 
-#ifndef TEST_NOTIFICATION_SERVER
-#include <httpd.h>
-#include <http_log.h>
-#include <apr_hash.h>
-#include <apr_tables.h>
-
-#else
+#ifdef TEST_NOTIFICATION_SERVER
 static int force_exit = 0;
 #endif
 
@@ -54,10 +51,10 @@ static struct libwebsocket_context *context = NULL;
 
 struct ntf_thread_config {
 	struct nc_session *session;
-	char *session_hash;
+	char *session_id;
 };
 
-extern apr_hash_t *netconf_sessions_list;
+extern struct session_with_mutex *netconf_sessions_list;
 static pthread_key_t thread_key;
 
 /*
@@ -115,7 +112,7 @@ struct per_session_data__http {
 static int callback_http(struct libwebsocket_context *context,
 		struct libwebsocket *wsi,
 		enum libwebsocket_callback_reasons reason, void *user,
-							   void *in, size_t len)
+							   void *in, size_t UNUSED(len))
 {
 	char client_name[128];
 	char client_ip[128];
@@ -127,7 +124,7 @@ static int callback_http(struct libwebsocket_context *context,
 
 	switch (reason) {
 	case LWS_CALLBACK_HTTP:
-		for (n = 0; n < (sizeof(whitelist) / sizeof(whitelist[0]) - 1); n++)
+		for (n = 0; n < (signed) (sizeof(whitelist) / sizeof(whitelist[0]) - 1); n++)
 			if (in && strcmp((const char *)in, whitelist[n].urlpath) == 0)
 				break;
 
@@ -263,22 +260,24 @@ bail:
 
 struct per_session_data__notif_client {
 	int number;
-	char *session_key;
+	char *session_id;
 	struct nc_session *session;
 };
 
-struct session_with_mutex *get_ncsession_from_key(const char *session_key)
+struct session_with_mutex *get_ncsession_from_key(const char *session_id)
 {
 	struct session_with_mutex *locked_session = NULL;
-	if (session_key == NULL) {
+	if (session_id == NULL) {
 		return (NULL);
 	}
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
 	return locked_session;
 }
 
 /* rpc parameter is freed after the function call */
-static int send_recv_process(struct nc_session *session, const char* operation, nc_rpc* rpc)
+static int send_recv_process(struct nc_session *session, const char* UNUSED(operation), nc_rpc* rpc)
 {
 	nc_reply *reply = NULL;
 	char *data = NULL;
@@ -338,32 +337,35 @@ static void notification_fileprint (time_t eventtime, const char* content)
 {
 	struct session_with_mutex *target_session = NULL;
 	notification_t *ntf = NULL;
-	char *session_hash = NULL;
+	const char *session_id = NULL;
 
 	DEBUG("Accepted notif: %lu %s\n", (unsigned long int) eventtime, content);
 
-	session_hash = pthread_getspecific(thread_key);
-	DEBUG("notification: fileprint getspecific (%s)", session_hash);
+	session_id = pthread_getspecific(thread_key);
+	DEBUG("notification: fileprint getspecific (%s)", session_id);
 	if (pthread_rwlock_wrlock(&session_lock) != 0) {
 		ERROR("notifications: Error while locking rwlock");
 		return;
 	}
-	DEBUG("Get session with mutex from key %s.", session_hash);
-	target_session = get_ncsession_from_key(session_hash);
+	DEBUG("Get session with mutex from key %s.", session_id);
+	target_session = get_ncsession_from_key(session_id);
 	if (target_session == NULL) {
-		ERROR("notifications: no session found last_session_key (%s)", session_hash);
+		ERROR("notifications: no session found last_session_key (%s)", session_id);
 		goto unlock_glob;
 	}
 	if (pthread_mutex_lock(&target_session->lock) != 0) {
 		ERROR("notifications: Error while locking rwlock");
 	}
 
-	if (target_session->notifications == NULL) {
-		ERROR("notifications: target_session->notifications is NULL");
-		goto unlock_all;
-	}
 	DEBUG("notification: ready to push to notifications queue");
-	ntf = (notification_t *) apr_array_push(target_session->notifications);
+    if (target_session->notif_count < NOTIFICATION_QUEUE_SIZE) {
+        ++target_session->notif_count;
+        target_session->notifications = realloc(target_session->notifications,
+                                                target_session->notif_count * sizeof *target_session->notifications);
+        if (target_session->notifications) {
+            ntf = target_session->notifications + target_session->notif_count - 1;
+        }
+    }
 	if (ntf == NULL) {
 		ERROR("notifications: Failed to allocate element ");
 		goto unlock_all;
@@ -393,15 +395,15 @@ void* notification_thread(void* arg)
 	DEBUG("notifications: in thread for libnetconf notifications");
 
 	/* store hash identification of netconf session for notifications printing callback */
-	if (pthread_setspecific(thread_key, config->session_hash) != 0) {
+	if (pthread_setspecific(thread_key, config->session_id) != 0) {
 		ERROR("notifications: cannot set thread-specific hash value.");
 	}
 
 	DEBUG("notifications: dispatching");
 	ncntf_dispatch_receive(config->session, notification_fileprint);
 	DEBUG("notifications: ended thread for libnetconf notifications");
-	if (config->session_hash != NULL) {
-		free(config->session_hash);
+	if (config->session_id != NULL) {
+		free(config->session_id);
 	}
 	if (config != NULL) {
 		free(config);
@@ -410,7 +412,7 @@ void* notification_thread(void* arg)
 }
 
 
-int notif_subscribe(struct session_with_mutex *locked_session, const char *session_hash, time_t start_time, time_t stop_time)
+int notif_subscribe(struct session_with_mutex *locked_session, const char *session_id, time_t start_time, time_t stop_time)
 {
 	time_t start = -1;
 	time_t stop = -1;
@@ -486,8 +488,8 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 		goto operation_failed;
 	}
 	tconfig->session = session;
-	tconfig->session_hash = strdup(session_hash);
-	DEBUG("notifications: creating libnetconf notification thread (%s).", tconfig->session_hash);
+	tconfig->session_id = strdup(session_id);
+	DEBUG("notifications: creating libnetconf notification thread (%s).", tconfig->session_id);
 
 	pthread_mutex_unlock(&locked_session->lock);
 	DEBUG("Create notification_thread.");
@@ -509,8 +511,7 @@ static int callback_notification(struct libwebsocket_context *context,
 			enum libwebsocket_callback_reasons reason,
 			void *user, void *in, size_t len)
 {
-	int n = 0;
-	int m = 0;
+	int n = 0, m = 0, i;
 	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 40960 + LWS_SEND_BUFFER_POST_PADDING];
 	unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
 	struct per_session_data__notif_client *pss = (struct per_session_data__notif_client *)user;
@@ -521,7 +522,7 @@ static int callback_notification(struct libwebsocket_context *context,
 		break;
 
 	case LWS_CALLBACK_SERVER_WRITEABLE:
-		if (pss->session_key == NULL) {
+		if (pss->session_id == NULL) {
 			return 0;
 		}
 		//DEBUG("Callback server writeable.");
@@ -531,7 +532,7 @@ static int callback_notification(struct libwebsocket_context *context,
 			return -1;
 		}
 		//DEBUG("get session_with_mutex for %s.", pss->session_key);
-		struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
+		struct session_with_mutex *ls = get_ncsession_from_key(pss->session_id);
 		if (ls == NULL) {
 			DEBUG("notification: session not found");
 			if (pthread_rwlock_unlock (&session_lock) != 0) {
@@ -556,45 +557,36 @@ static int callback_notification(struct libwebsocket_context *context,
 		}
 		//DEBUG("lock private lock.");
 		notification_t *notif = NULL;
-		//DEBUG("check for uninitialized notification list.");
-		if (ls->notifications == NULL) {
-				DEBUG("notification: no notifications array");
-			DEBUG("unlock private lock.");
-			if (pthread_mutex_unlock(&ls->lock) != 0) {
-				DEBUG("notification: cannot unlock session");
-			}
-			return -1;
-		}
-		//DEBUG("check for empty notification list.");
-		if (!apr_is_empty_array(ls->notifications)) {
-			DEBUG("notification: POP notifications for session");
 
-			while ((notif = (notification_t *) apr_array_pop(ls->notifications)) != NULL) {
-				n = 0;
-				pthread_mutex_lock(&json_lock);
-				json_object *notif_json = json_object_new_object();
-				json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
-				json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
-				pthread_mutex_unlock(&json_lock);
+        DEBUG("notification: POP notifications for session");
 
-				const char *msgtext = json_object_to_json_string(notif_json);
+        for (i = 0; i < ls->notif_count; ++i) {
+            notif = ls->notifications + i;
 
-				//n = sprintf((char *)p, "{\"eventtime\": \"%s\", \"content\": \"notification\"}", t);
-				n = sprintf((char *)p, "%s", msgtext);
-				DEBUG("ws send %dB in %lu", n, sizeof(buf));
-				m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
-				if (lws_send_pipe_choked(wsi)) {
-					libwebsocket_callback_on_writable(context, wsi);
-					break;
-				}
+            n = 0;
+            pthread_mutex_lock(&json_lock);
+            json_object *notif_json = json_object_new_object();
+            json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
+            json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
+            pthread_mutex_unlock(&json_lock);
 
-				pthread_mutex_lock(&json_lock);
-				json_object_put(notif_json);
-				pthread_mutex_unlock(&json_lock);
-				free(notif->content);
-			}
-			DEBUG("notification: POP notifications done");
-		}
+            const char *msgtext = json_object_to_json_string(notif_json);
+
+            //n = sprintf((char *)p, "{\"eventtime\": \"%s\", \"content\": \"notification\"}", t);
+            n = sprintf((char *)p, "%s", msgtext);
+            DEBUG("ws send %dB in %lu", n, sizeof(buf));
+            m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+            if (lws_send_pipe_choked(wsi)) {
+                libwebsocket_callback_on_writable(context, wsi);
+                break;
+            }
+
+            pthread_mutex_lock(&json_lock);
+            json_object_put(notif_json);
+            pthread_mutex_unlock(&json_lock);
+            free(notif->content);
+        }
+        DEBUG("notification: POP notifications done");
 
 		//DEBUG("unlock private lock");
 		if (pthread_mutex_unlock(&ls->lock) != 0) {
@@ -612,26 +604,26 @@ static int callback_notification(struct libwebsocket_context *context,
 	case LWS_CALLBACK_RECEIVE:
 		DEBUG("Callback receive.");
 		DEBUG("received: (%s)", (char *)in);
-		if (pss->session_key == NULL) {
-			char session_key_buf[41];
+		if (pss->session_id == NULL) {
+			char session_id_buf[41];
 			int start = -1;
 			time_t stop = time(NULL) + 30;
 
-			strncpy((char *) session_key_buf, (const char *) in, 40);
-			session_key_buf[40] = '\0';
-			pss->session_key = strdup(session_key_buf);
+			strncpy((char *) session_id_buf, (const char *) in, 40);
+			session_id_buf[40] = '\0';
+			pss->session_id = strdup(session_id_buf);
 			sscanf(in+40, "%d %d", (int *) &start, (int *) &stop);
-			DEBUG("notification: get key (%s) from (%s) (%i,%i)", pss->session_key, (char *) in, (int) start, (int) stop);
+			DEBUG("notification: get key (%s) from (%s) (%i,%i)", pss->session_id, (char *) in, (int) start, (int) stop);
 
 			DEBUG("lock session lock");
 			if (pthread_rwlock_rdlock (&session_lock) != 0) {
 				DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 				return -1;
 			}
-			DEBUG("get session from key (%s)", pss->session_key);
-			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_key);
+			DEBUG("get session from key (%s)", pss->session_id);
+			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_id);
 			if (ls == NULL) {
-				DEBUG("notification: session_key not found (%s)", pss->session_key);
+				DEBUG("notification: session_key not found (%s)", pss->session_id);
 				DEBUG("unlock session lock");
 				if (pthread_rwlock_unlock (&session_lock) != 0) {
 					DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
@@ -667,7 +659,7 @@ static int callback_notification(struct libwebsocket_context *context,
 			pthread_mutex_unlock(&ls->lock);
 
 			/* notif_subscribe locks on its own */
-			return notif_subscribe(ls, pss->session_key, (time_t) start, (time_t) stop);
+			return notif_subscribe(ls, pss->session_id, (time_t) start, (time_t) stop);
 		}
 		if (len < 6)
 			break;
@@ -708,21 +700,29 @@ static struct libwebsocket_protocols protocols[] = {
 		callback_http,		/* callback */
 		sizeof (struct per_session_data__http),	/* per_session_data_size */
 		0,			/* max frame size / rx buffer */
+        0,
+        NULL,
+        NULL,
+        0
 	},
 	{
 		"notification-protocol",
 		callback_notification,
 		sizeof(struct per_session_data__notif_client),
 		4000,
+        0,
+        NULL,
+        NULL,
+        0
 	},
-	{ NULL, NULL, 0, 0 } /* terminator */
+	{ NULL, NULL, 0, 0, 0, NULL, NULL, 0 } /* terminator */
 };
 
 
 /**
  * initialization of notification module
  */
-int notification_init(apr_pool_t * pool, server_rec * server)
+int notification_init(void)
 {
 	//char cert_path[1024];
 	//char key_path[1024];
@@ -777,7 +777,7 @@ int notification_init(apr_pool_t * pool, server_rec * server)
 	return 0;
 }
 
-void notification_close()
+void notification_close(void)
 {
 	if (context) {
 		libwebsocket_context_destroy(context);

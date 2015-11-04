@@ -48,24 +48,15 @@
 #define __MOD_NETCONF_COMMON_H
 
 #include <pthread.h>
-#include <httpd.h>
-#include <http_log.h>
-#include <http_config.h>
-#include <apr_hash.h>
 #include <json/json.h>
 #include <libssh2.h>
+
+#define UNUSED(x) UNUSED_ ## x __attribute__((__unused__))
 
 /**
  * \brief Check if pointer is not NULL, free memory and set pointer to NULL
  */
 #define CHECK_AND_FREE(pointer) if (pointer != NULL) { free(pointer); pointer = NULL; }
-
-struct pass_to_thread {
-	int client; /**< opened socket */
-	apr_pool_t * pool; /**< ?? */
-	server_rec * server; /**< ?? */
-	apr_hash_t * netconf_sessions_list; /**< ?? */
-};
 
 typedef struct notification {
 	time_t eventtime;
@@ -74,19 +65,22 @@ typedef struct notification {
 
 struct session_with_mutex {
 	struct nc_session * session; /**< netconf session */
-	apr_array_header_t *notifications;
+	notification_t *notifications;
+    int notif_count;
 	json_object *hello_message;
 	char ntfc_subscribed; /**< 0 when notifications are not subscribed */
 	char closed; /**< 0 when session is terminated */
-	apr_time_t last_activity;
+	time_t last_activity;
 	pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
+
+	struct session_with_mutex *prev;
+    struct session_with_mutex *next;
 };
 
-typedef struct {
-	apr_pool_t *pool;
-	apr_proc_t *forkproc;
-	char* sockname;
-} mod_netconf_cfg;
+struct pass_to_thread {
+    int client; /**< opened socket */
+    struct session_with_mutex *netconf_sessions_list; /**< ?? */
+};
 
 
 extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
@@ -97,31 +91,14 @@ extern pthread_mutex_t json_lock;
 json_object *create_error(const char *errmess);
 json_object *create_ok();
 
-extern server_rec *http_server;
-#ifndef HTTPD_INDEPENDENT
-# define APLOGDEBUG(...) ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, http_server, __VA_ARGS__);
-# define APLOGERROR(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, http_server, __VA_ARGS__);
-#else
-# define APLOGDEBUG(...)
-# define APLOGERROR(...)
-#endif
-
 #define DEBUG(...) do { \
-	if (http_server != NULL) { \
-		APLOGDEBUG(__VA_ARGS__); \
-	} else { \
-		fprintf(stderr, __VA_ARGS__); \
-		fprintf(stderr, "\n"); \
-	} \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
 } while (0);
 
 #define ERROR(...) do { \
-	if (http_server != NULL) { \
-		APLOGERROR(__VA_ARGS__); \
-	} else { \
-		fprintf(stderr, __VA_ARGS__); \
-		fprintf(stderr, "\n"); \
-	} \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
 } while (0);
 
 #define GETSPEC_ERR_REPLY \

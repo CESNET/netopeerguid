@@ -1,6 +1,6 @@
 /*!
  * \file notification_module.h
- * \brief 
+ * \brief
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \date 2013
  */
@@ -44,12 +44,7 @@
 #define __NOTIFICATION_MODULE_H
 #include <libwebsockets.h>
 
-#ifndef TEST_NOTIFICATION_SERVER
-#include <httpd.h>
-#include <http_log.h>
-#include <apr_hash.h>
-#else
-typedef struct p {} apr_pool_t;
+#ifdef TEST_NOTIFICATION_SERVER
 typedef struct s {} server_rec;
 #endif
 
@@ -59,12 +54,9 @@ typedef struct s {} server_rec;
 
 /**
  * \brief Notification module initialization
- * \param pool - apr_pool_t for memory allocation
- * \param server - server_rec for Apache logging
- * \param conns - apr_hash_t representing the list of netconf connections
  * \return 0 on success
  */
-int notification_init(apr_pool_t * pool, server_rec * server);
+int notification_init();
 
 /**
  * \brief Handle method - passes execution into the libwebsocket library

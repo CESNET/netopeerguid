@@ -43,29 +43,23 @@
  * if advised of the possibility of such damage.
  *
  */
+#define _GNU_SOURCE
 
 #include <unistd.h>
 #include <poll.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/fcntl.h>
 #include <pwd.h>
+#include <errno.h>
 #include <grp.h>
+#include <signal.h>
 #include <pthread.h>
 #include <ctype.h>
 
-#include <unixd.h>
-#include <httpd.h>
-#include <http_log.h>
-#include <http_config.h>
-
-#include <apr_sha1.h>
-#include <apr_hash.h>
-#include <apr_signal.h>
-#include <apr_strings.h>
-
-#include <json/json.h>
+#include <libyang/libyang.h>
 
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>
@@ -83,7 +77,6 @@
 #define SOCKET_FILENAME "/var/run/mod_netconf.sock"
 #define MAX_SOCKET_CL 10
 #define BUFFER_SIZE 4096
-#define NOTIFICATION_QUEUE_SIZE 10
 #define ACTIVITY_CHECK_INTERVAL	10  /**< timeout in seconds, how often activity is checked */
 #define ACTIVITY_TIMEOUT	(60*60)  /**< timeout in seconds, after this time, session is automaticaly closed. */
 
@@ -93,8 +86,6 @@
 #ifndef offsetof
 #define offsetof(type, member) ((size_t) ((type *) 0)->member)
 #endif
-
-server_rec *http_server = NULL;
 
 /* timeout in msec */
 struct timeval timeout = { 1, 0 };
@@ -109,14 +100,14 @@ struct timeval timeout = { 1, 0 };
 #define MSG_ERROR 4
 #define MSG_UNKNOWN 5
 
-module AP_MODULE_DECLARE_DATA netconf_module;
-
 pthread_rwlock_t session_lock; /**< mutex protecting netconf_sessions_list from multiple access errors */
 pthread_mutex_t ntf_history_lock; /**< mutex protecting notification history list */
 pthread_mutex_t ntf_hist_clbc_mutex; /**< mutex protecting notification history list */
 pthread_mutex_t json_lock; /**< mutex for protecting json-c calls */
 
-apr_hash_t *netconf_sessions_list = NULL;
+struct session_with_mutex *netconf_sessions_list = NULL;
+
+static const char *sockname;
 
 static pthread_key_t notif_history_key;
 
@@ -136,67 +127,44 @@ static void signal_handler(int sign)
 	}
 }
 
-static char* gen_ncsession_hash( const char* hostname, const char* port, const char* sid)
-{
-	unsigned char hash_raw[APR_SHA1_DIGESTSIZE];
-	int i;
-	char* hash;
-
-	apr_sha1_ctx_t sha1_ctx;
-	apr_sha1_init(&sha1_ctx);
-	apr_sha1_update(&sha1_ctx, hostname, strlen(hostname));
-	apr_sha1_update(&sha1_ctx, port, strlen(port));
-	apr_sha1_update(&sha1_ctx, sid, strlen(sid));
-	apr_sha1_final(hash_raw, &sha1_ctx);
-
-	/* convert binary hash into hex string, which is printable */
-	hash = malloc(sizeof(char) * ((2*APR_SHA1_DIGESTSIZE)+1));
-	for (i = 0; i < APR_SHA1_DIGESTSIZE; i++) {
-		snprintf(hash + (2*i), 3, "%02x", hash_raw[i]);
-	}
-	//hash[2*APR_SHA1_DIGESTSIZE] = 0;
-
-	return (hash);
-}
-
-int netconf_callback_ssh_hostkey_check(const char* hostname, ssh_session session)
+int netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNUSED(session))
 {
 	/* always approve */
 	return (EXIT_SUCCESS);
 }
 
-char *netconf_callback_sshauth_passphrase(const char *username, const char *hostname, const char *priv_key_file)
+char *netconf_callback_sshauth_passphrase(const char *UNUSED(username), const char *UNUSED(hostname), const char *UNUSED(priv_key_file))
 {
 	char *buf;
 	buf = strdup(password);
 	return (buf);
 }
 
-char *netconf_callback_sshauth_password(const char* username, const char* hostname)
+char *netconf_callback_sshauth_password(const char* UNUSED(username), const char* UNUSED(hostname))
 {
 	char *buf;
 	buf = strdup(password);
 	return (buf);
 }
 
-char *netconf_callback_sshauth_interactive(const char *name, const char *instruction,
-                                           const char *prompt, int echo)
+char *netconf_callback_sshauth_interactive(const char *UNUSED(name), const char *UNUSED(instruction),
+                                           const char *UNUSED(prompt), int UNUSED(echo))
 {
 	char *buf;
 	buf = strdup(password);
 	return (buf);
 }
 
-void netconf_callback_error_process(const char *tag,
-		const char *type,
-		const char *severity,
-		const char *apptag,
-		const char *path,
+void netconf_callback_error_process(const char *UNUSED(tag),
+		const char *UNUSED(type),
+		const char *UNUSED(severity),
+		const char *UNUSED(apptag),
+		const char *UNUSED(path),
 		const char *message,
-		const char *attribute,
-		const char *element,
-		const char *ns,
-		const char *sid)
+		const char *UNUSED(attribute),
+		const char *UNUSED(element),
+		const char *UNUSED(ns),
+		const char *UNUSED(sid))
 {
 	json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
 	if (err_reply_p == NULL) {
@@ -386,11 +354,10 @@ NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
  *
  * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
  */
-static char* netconf_connect(apr_pool_t* pool, const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
+static const char *netconf_connect(const char* host, const char* port, const char* user, const char* pass, struct nc_cpblts * cpblts)
 {
 	struct nc_session* session = NULL;
-	struct session_with_mutex * locked_session;
-	char *session_key;
+	struct session_with_mutex * locked_session, *last_session;
 
 	/* connect to the requested NETCONF server */
 	password = (char*)pass;
@@ -400,23 +367,16 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 
 	/* if connected successful, add session to the list */
 	if (session != NULL) {
-		/* generate hash for the session */
-		session_key = gen_ncsession_hash(
-				(host==NULL) ? "localhost" : host,
-				(port==NULL) ? "830" : port,
-				nc_session_get_id(session));
-
-		/** \todo allocate from apr_pool */
 		if ((locked_session = calloc(1, sizeof(struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
 			nc_session_free(session);
 			session = NULL;
 			free(locked_session);
 			locked_session = NULL;
 			ERROR("Creating structure session_with_mutex failed %d (%s)", errno, strerror(errno));
-			return NULL;
+			return 0;
 		}
 		locked_session->session = session;
-		locked_session->last_activity = apr_time_now();
+		locked_session->last_activity = time(NULL);
 		locked_session->hello_message = NULL;
 		locked_session->closed = 0;
 		pthread_mutex_init (&locked_session->lock, NULL);
@@ -427,12 +387,17 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 			nc_session_free(session);
 			free (locked_session);
 			ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
-			return NULL;
+			return 0;
 		}
-		locked_session->notifications = apr_array_make(pool, NOTIFICATION_QUEUE_SIZE, sizeof(notification_t));
 		locked_session->ntfc_subscribed = 0;
 		DEBUG("Add connection to the list");
-		apr_hash_set(netconf_sessions_list, apr_pstrdup(pool, session_key), APR_HASH_KEY_STRING, (void *) locked_session);
+		if (!netconf_sessions_list) {
+            netconf_sessions_list = locked_session;
+        } else {
+            for (last_session = netconf_sessions_list; last_session->next; last_session = last_session->next);
+            last_session->next = locked_session;
+            locked_session->prev = last_session;
+        }
 		DEBUG("Before session_unlock");
 
 		/* lock session */
@@ -452,10 +417,10 @@ static char* netconf_connect(apr_pool_t* pool, const char* host, const char* por
 		pthread_mutex_unlock(&locked_session->lock);
 
 		DEBUG("NETCONF session established");
-		return (session_key);
+		return nc_session_get_id(session);
 	} else {
 		ERROR("Connection could not be established");
-		return (NULL);
+		return 0;
 	}
 
 }
@@ -486,7 +451,7 @@ static int close_and_free_session(struct session_with_mutex *locked_session)
 
 	/* session shouldn't be used by now */
 	/** \todo free all notifications from queue */
-	apr_array_clear(locked_session->notifications);
+	free(locked_session->notifications);
 	pthread_mutex_destroy(&locked_session->lock);
 	if (locked_session->hello_message != NULL) {
 		/** \todo free hello_message */
@@ -500,11 +465,11 @@ static int close_and_free_session(struct session_with_mutex *locked_session)
 	return (EXIT_SUCCESS);
 }
 
-static int netconf_close(const char* session_key, json_object **reply)
+static int netconf_close(const char *session_id, json_object **reply)
 {
-	struct session_with_mutex * locked_session;
+	struct session_with_mutex *locked_session;
 
-	DEBUG("Key in hash to close: %s", session_key);
+	DEBUG("Session to close: %s", session_id);
 
 	/* get exclusive (write) access to sessions_list (conns) */
 	DEBUG("lock session lock.");
@@ -514,10 +479,26 @@ static int netconf_close(const char* session_key, json_object **reply)
 		(*reply) = create_error("Internal: Error while locking.");
 		return EXIT_FAILURE;
 	}
-	/* get session to close */
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
 	/* remove session from the active sessions list -> nobody new can now work with session */
-	apr_hash_set(netconf_sessions_list, session_key, APR_HASH_KEY_STRING, NULL);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
+
+    if (!locked_session) {
+        ERROR("Could not find the session \"%s\" to close.", session_id);
+        (*reply) = create_error("Internal: Error while finding a session.");
+        return EXIT_FAILURE;
+    }
+
+    if (!locked_session->prev) {
+        netconf_sessions_list = netconf_sessions_list->next;
+        netconf_sessions_list->prev = NULL;
+    } else {
+        locked_session->prev->next = locked_session->next;
+        if (locked_session->next) {
+            locked_session->next->prev = locked_session->prev;
+        }
+    }
 
 	DEBUG("UNLOCK wrlock %s", __func__);
 	if (pthread_rwlock_unlock (&session_lock) != 0) {
@@ -539,12 +520,12 @@ static int netconf_close(const char* session_key, json_object **reply)
  * Test reply message type and return error message.
  *
  * \param[in] session	nc_session internal struct
- * \param[in] session_key session key, NULL to disable disconnect on error
+ * \param[in] session_key session ID, 0 to disable disconnect on error
  * \param[in] msgt	RPC-REPLY message type
  * \param[out] data
  * \return NULL on success
  */
-json_object *netconf_test_reply(struct nc_session *session, const char *session_key, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
+json_object *netconf_test_reply(struct nc_session *session, const char *session_id, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
 {
 	NC_REPLY_TYPE replyt;
 	json_object *err = NULL;
@@ -554,8 +535,8 @@ json_object *netconf_test_reply(struct nc_session *session, const char *session_
 		case NC_MSG_UNKNOWN:
 			if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
 				ERROR("mod_netconf: receiving rpc-reply failed");
-				if (session_key != NULL) {
-					netconf_close(session_key, &err);
+				if (session_id) {
+					netconf_close(session_id, &err);
 				}
 				if (err != NULL) {
 					return err;
@@ -626,7 +607,7 @@ json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 		/* send the request and get the reply */
 		msgt = netconf_send_recv_timed(session, rpc, 5000, &reply);
 		/* process the result of the operation */
-		return netconf_test_reply(session, NULL, msgt, reply, NULL);
+		return netconf_test_reply(session, 0, msgt, reply, NULL);
 	} else {
 		ERROR("Unknown session to process.");
 		return create_error("Internal error: Unknown session to process.");
@@ -636,12 +617,12 @@ json_object *netconf_unlocked_op(struct nc_session *session, nc_rpc* rpc)
 /**
  * Perform RPC method that returns data.
  *
- * \param[in] session_key	session identifier
+ * \param[in] session_id	session identifier
  * \param[in] rpc	RPC message to perform
  * \param[out] received_data	received data string, can be NULL when no data expected, value can be set to NULL if no data received
  * \return NULL on success, json object with error otherwise
  */
-static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **received_data)
+static json_object *netconf_op(const char *session_id, nc_rpc* rpc, char **received_data)
 {
 	struct nc_session *session = NULL;
 	struct session_with_mutex * locked_session;
@@ -667,7 +648,9 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 		goto finished;
 	}
 	/* get session where send the RPC */
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		session = locked_session->session;
 	}
@@ -692,7 +675,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 			res = create_error("Internal: Could not unlock.");
 		}
 
-		locked_session->last_activity = apr_time_now();
+		locked_session->last_activity = time(NULL);
 
 		/* send the request and get the reply */
 		msgt = netconf_send_recv_timed(session, rpc, 5000, &reply);
@@ -702,7 +685,7 @@ static json_object *netconf_op(const char* session_key, nc_rpc* rpc, char **rece
 		pthread_mutex_unlock(&locked_session->lock);
 		/* end of critical section */
 
-		res = netconf_test_reply(session, session_key, msgt, reply, &data);
+		res = netconf_test_reply(session, session_id, msgt, reply, &data);
 	} else {
 		/* release lock on failure */
 		DEBUG("UNLOCK wrlock %s", __func__);
@@ -748,11 +731,12 @@ static char* netconf_getconfig(const char* session_key, NC_DATASTORE source, con
 
 	/* tell server to show all elements even if they have default values */
 #ifdef HAVE_WITHDEFAULTS_TAGGED
-	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED))
 #else
-	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
-	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
+	if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET))
+	//if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL))
 #endif
+    {
 		ERROR("mod_netconf: setting withdefaults failed");
 	}
 
@@ -1161,7 +1145,7 @@ char *get_param_string(json_object *data, const char *name)
 	return res;
 }
 
-json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
+json_object *handle_op_connect(json_object *request)
 {
 	char *host = NULL;
 	char *port = NULL;
@@ -1169,7 +1153,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	char *pass = NULL;
 	json_object *capabilities = NULL;
 	json_object *reply = NULL;
-	char *session_key_hash = NULL;
+	const char *session_id = NULL;
 	struct nc_cpblts* cpblts = NULL;
 	unsigned int len, i;
 
@@ -1198,10 +1182,10 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	DEBUG("host: %s, port: %s, user: %s", host, port, user);
 	if ((host == NULL) || (user == NULL)) {
 		ERROR("Cannot connect - insufficient input.");
-		session_key_hash = NULL;
+		session_id = NULL;
 	} else {
-		session_key_hash = netconf_connect(pool, host, port, user, pass, cpblts);
-		DEBUG("hash: %s", session_key_hash);
+		session_id = netconf_connect(host, port, user, pass, cpblts);
+		DEBUG("SID: %s", session_id);
 	}
 	if (cpblts != NULL) {
 		nc_cpblts_free(cpblts);
@@ -1210,7 +1194,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	GETSPEC_ERR_REPLY
 
 	pthread_mutex_lock(&json_lock);
-	if (session_key_hash == NULL) {
+	if (session_id == NULL) {
 		/* negative reply */
 		if (err_reply == NULL) {
 			reply = json_object_new_object();
@@ -1226,9 +1210,7 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 		/* positive reply */
 		reply = json_object_new_object();
 		json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
-		json_object_object_add(reply, "session", json_object_new_string(session_key_hash));
-
-		free(session_key_hash);
+		json_object_object_add(reply, "session", json_object_new_string(session_id));
 	}
 	memset(pass, 0, strlen(pass));
 	pthread_mutex_unlock(&json_lock);
@@ -1239,19 +1221,19 @@ json_object *handle_op_connect(apr_pool_t *pool, json_object *request)
 	return reply;
 }
 
-json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_get(json_object *request, const char *session_id)
 {
 	char *filter = NULL;
 	char *data = NULL;
 	json_object *reply = NULL;
 
-	DEBUG("Request: get (session %s)", session_key);
+	DEBUG("Request: get (session %s)", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	filter = get_param_string(request, "filter");
 	pthread_mutex_unlock(&json_lock);
 
-	if ((data = netconf_get(session_key, filter, &reply)) == NULL) {
+	if ((data = netconf_get(session_id, filter, &reply)) == NULL) {
 		CHECK_ERR_SET_REPLY_ERR("Get information failed.")
 	} else {
 		reply = create_data(data);
@@ -1260,7 +1242,7 @@ json_object *handle_op_get(apr_pool_t *pool, json_object *request, const char *s
 	return reply;
 }
 
-json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_getconfig(json_object *request, const char *session_id)
 {
 	NC_DATASTORE ds_type_s = -1;
 	char *filter = NULL;
@@ -1268,7 +1250,7 @@ json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const c
 	char *source = NULL;
 	json_object *reply = NULL;
 
-	DEBUG("Request: get-config (session %s)", session_key);
+	DEBUG("Request: get-config (session %s)", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	filter = get_param_string(request, "filter");
@@ -1279,12 +1261,12 @@ json_object *handle_op_getconfig(apr_pool_t *pool, json_object *request, const c
 	}
 	pthread_mutex_unlock(&json_lock);
 
-	if (ds_type_s == -1) {
+	if ((int)ds_type_s == -1) {
 		reply = create_error("Invalid source repository type requested.");
 		goto finalize;
 	}
 
-	if ((data = netconf_getconfig(session_key, ds_type_s, filter, &reply)) == NULL) {
+	if ((data = netconf_getconfig(session_id, ds_type_s, filter, &reply)) == NULL) {
 		CHECK_ERR_SET_REPLY_ERR("Get configuration operation failed.")
 	} else {
 		reply = create_data(data);
@@ -1296,7 +1278,7 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_getschema(json_object *request, const char *session_id)
 {
 	char *data = NULL;
 	char *identifier = NULL;
@@ -1304,7 +1286,7 @@ json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const c
 	char *format = NULL;
 	json_object *reply = NULL;
 
-	DEBUG("Request: get-schema (session %s)", session_key);
+	DEBUG("Request: get-schema (session %s)", session_id);
 	pthread_mutex_lock(&json_lock);
 	identifier = get_param_string(request, "identifier");
 	version = get_param_string(request, "version");
@@ -1317,7 +1299,7 @@ json_object *handle_op_getschema(apr_pool_t *pool, json_object *request, const c
 	}
 
 	DEBUG("get-schema(version: %s, format: %s)", version, format);
-	if ((data = netconf_getschema(session_key, identifier, version, format, &reply)) == NULL) {
+	if ((data = netconf_getschema(session_id, identifier, version, format, &reply)) == NULL) {
 		CHECK_ERR_SET_REPLY_ERR("Get models operation failed.")
 	} else {
 		reply = create_data(data);
@@ -1330,7 +1312,7 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_editconfig(json_object *request, const char *session_id)
 {
 	NC_DATASTORE ds_type_s = -1;
 	NC_DATASTORE ds_type_t = -1;
@@ -1345,7 +1327,7 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 	char *testopt = NULL;
 	json_object *reply = NULL;
 
-	DEBUG("Request: edit-config (session %s)", session_key);
+	DEBUG("Request: edit-config (session %s)", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	/* get parameters */
@@ -1397,7 +1379,7 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 		erropt_type = 0;
 	}
 
-	if (ds_type_t == -1) {
+	if ((int)ds_type_t == -1) {
 		reply = create_error("Invalid target repository type requested.");
 		goto finalize;
 	}
@@ -1418,7 +1400,7 @@ json_object *handle_op_editconfig(apr_pool_t *pool, json_object *request, const 
 		testopt_type = NC_EDIT_TESTOPT_TESTSET;
 	}
 
-	reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, testopt_type, config);
+	reply = netconf_editconfig(session_id, ds_type_s, ds_type_t, defop_type, erropt_type, testopt_type, config);
 
 	CHECK_ERR_SET_REPLY
 finalize:
@@ -1431,7 +1413,7 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_copyconfig(json_object *request, const char *session_id)
 {
 	NC_DATASTORE ds_type_s = -1;
 	NC_DATASTORE ds_type_t = -1;
@@ -1443,7 +1425,7 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 
 	json_object *reply = NULL;
 
-	DEBUG("Request: copy-config (session %s)", session_key);
+	DEBUG("Request: copy-config (session %s)", session_id);
 
 	/* get parameters */
 	pthread_mutex_lock(&json_lock);
@@ -1463,13 +1445,13 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 		/* source == NULL *//* no explicit source specified -> use config data */
 		ds_type_s = NC_DATASTORE_CONFIG;
 	}
-	if (ds_type_s == -1) {
+	if ((int)ds_type_s == -1) {
 		/* source datastore specified, but it is invalid */
 		reply = create_error("Invalid source repository type requested.");
 		goto finalize;
 	}
 
-	if (ds_type_t == -1) {
+	if ((int)ds_type_t == -1) {
 		/* invalid target datastore specified */
 		reply = create_error("Invalid target repository type requested.");
 		goto finalize;
@@ -1491,7 +1473,7 @@ json_object *handle_op_copyconfig(apr_pool_t *pool, json_object *request, const 
 			uri_trg = "";
 		}
 	}
-	reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, uri_src, uri_trg);
+	reply = netconf_copyconfig(session_id, ds_type_s, ds_type_t, config, uri_src, uri_trg);
 
 	CHECK_ERR_SET_REPLY
 
@@ -1505,19 +1487,19 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_generic(json_object *request, const char *session_id)
 {
 	json_object *reply = NULL;
 	char *config = NULL;
 	char *data = NULL;
 
-	DEBUG("Request: generic request for session %s", session_key);
+	DEBUG("Request: generic request for session %s", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	config = get_param_string(request, "content");
 	pthread_mutex_unlock(&json_lock);
 
-	reply = netconf_generic(session_key, config, &data);
+	reply = netconf_generic(session_id, config, &data);
 	if (reply == NULL) {
 		GETSPEC_ERR_REPLY
 		if (err_reply != NULL) {
@@ -1539,12 +1521,12 @@ json_object *handle_op_generic(apr_pool_t *pool, json_object *request, const cha
 	return reply;
 }
 
-json_object *handle_op_disconnect(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_disconnect(json_object *UNUSED(request), const char *session_id)
 {
 	json_object *reply = NULL;
-	DEBUG("Request: Disconnect session %s", session_key);
+	DEBUG("Request: Disconnect session %s", session_id);
 
-	if (netconf_close(session_key, &reply) != EXIT_SUCCESS) {
+	if (netconf_close(session_id, &reply) != EXIT_SUCCESS) {
 		CHECK_ERR_SET_REPLY_ERR("Get configuration information from device failed.")
 	} else {
 		reply = create_ok();
@@ -1552,12 +1534,12 @@ json_object *handle_op_disconnect(apr_pool_t *pool, json_object *request, const 
 	return reply;
 }
 
-json_object *handle_op_kill(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_kill(json_object *request, const char *session_id)
 {
 	json_object *reply = NULL;
 	char *sid = NULL;
 
-	DEBUG("Request: kill-session, session %s", session_key);
+	DEBUG("Request: kill-session, session %s", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	sid = get_param_string(request, "session-id");
@@ -1568,7 +1550,7 @@ json_object *handle_op_kill(apr_pool_t *pool, json_object *request, const char *
 		goto finalize;
 	}
 
-	reply = netconf_killsession(session_key, sid);
+	reply = netconf_killsession(session_id, sid);
 
 	CHECK_ERR_SET_REPLY
 
@@ -1577,12 +1559,12 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_reloadhello(json_object *UNUSED(request), const char *session_id)
 {
 	struct nc_session *temp_session = NULL;
 	struct session_with_mutex * locked_session = NULL;
 	json_object *reply = NULL;
-	DEBUG("Request: get info about session %s", session_key);
+	DEBUG("Request: get info about session %s", session_id);
 
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_wrlock(&session_lock) != 0) {
@@ -1590,7 +1572,9 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 		return NULL;
 	}
 
-	locked_session = (struct session_with_mutex *) apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
 	if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
 		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
@@ -1625,18 +1609,20 @@ json_object *handle_op_reloadhello(apr_pool_t *pool, json_object *request, const
 	return reply;
 }
 
-json_object *handle_op_info(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_info(json_object *UNUSED(request), const char *session_id)
 {
 	json_object *reply = NULL;
 	struct session_with_mutex * locked_session = NULL;
-	DEBUG("Request: get info about session %s", session_key);
+	DEBUG("Request: get info about session %s", session_id);
 
 	DEBUG("LOCK wrlock %s", __func__);
 	if (pthread_rwlock_rdlock(&session_lock) != 0) {
 		ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 	}
 
-	locked_session = (struct session_with_mutex *) apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
@@ -1684,7 +1670,7 @@ failed:
 	pthread_mutex_unlock(&json_lock);
 }
 
-json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_ntfgethistory(json_object *request, const char *session_id)
 {
 	json_object *reply = NULL;
 	json_object *js_tmp = NULL;
@@ -1696,7 +1682,7 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 	time_t stop = 0;
 	int64_t from = 0, to = 0;
 
-	DEBUG("Request: get notification history, session %s", session_key);
+	DEBUG("Request: get notification history, session %s", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	sid = get_param_string(request, "session");
@@ -1728,7 +1714,9 @@ json_object *handle_op_ntfgethistory(apr_pool_t *pool, json_object *request, con
 		goto finalize;
 	}
 
-	locked_session = (struct session_with_mutex *)apr_hash_get(netconf_sessions_list, session_key, APR_HASH_KEY_STRING);
+	for (locked_session = netconf_sessions_list;
+         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		DEBUG("LOCK mutex %s", __func__);
 		pthread_mutex_lock(&locked_session->lock);
@@ -1803,7 +1791,7 @@ finalize:
 	return reply;
 }
 
-json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const char *session_key)
+json_object *handle_op_validate(json_object *request, const char *session_id)
 {
 	json_object *reply = NULL;
 	char *sid = NULL;
@@ -1812,7 +1800,7 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 	nc_rpc *rpc = NULL;
 	NC_DATASTORE target_ds;
 
-	DEBUG("Request: validate datastore, session %s", session_key);
+	DEBUG("Request: validate datastore, session %s", session_id);
 
 	pthread_mutex_lock(&json_lock);
 	sid = get_param_string(request, "session");
@@ -1843,7 +1831,7 @@ json_object *handle_op_validate(apr_pool_t *pool, json_object *request, const ch
 	}
 
 	DEBUG("Request: validate datastore");
-	if ((reply = netconf_op(session_key, rpc, NULL)) == NULL) {
+	if ((reply = netconf_op(session_id, rpc, NULL)) == NULL) {
 
 		CHECK_ERR_SET_REPLY
 
@@ -1871,11 +1859,10 @@ void * thread_routine (void * arg)
 	NC_DATASTORE ds_type_t = -1;
 	int status = 0;
 	const char *msgtext;
-	char *session_key = NULL;
+	char *session_id = NULL;
 	char *target = NULL;
 	char *url = NULL;
 	char *chunked_out_msg = NULL;
-	apr_pool_t * pool = ((struct pass_to_thread*)arg)->pool;
 	//server_rec * server = ((struct pass_to_thread*)arg)->server;
 	int client = ((struct pass_to_thread*)arg)->client;
 
@@ -1928,7 +1915,7 @@ void * thread_routine (void * arg)
 				continue;
 			}
 
-			session_key = get_param_string(request, "session");
+			session_id = get_param_string(request, "session");
 			if (json_object_object_get_ex(request, "type", &js_tmp) == TRUE) {
 				operation = json_object_get_int(js_tmp);
 				json_object_put(js_tmp);
@@ -1940,9 +1927,9 @@ void * thread_routine (void * arg)
 				goto send_reply;
 			}
 
-			DEBUG("operation %d session_key %s.", operation, session_key);
+			DEBUG("operation %d session_id %s.", operation, session_id);
 			/* DO NOT FREE session_key HERE, IT IS PART OF REQUEST */
-			if (operation != MSG_CONNECT && session_key == NULL) {
+			if (operation != MSG_CONNECT && session_id == NULL) {
 				reply = create_error("Missing session specification.");
 				pthread_mutex_lock(&json_lock);
 				msgtext = json_object_to_json_string(reply);
@@ -1972,22 +1959,22 @@ void * thread_routine (void * arg)
 			/* process required operation */
 			switch (operation) {
 			case MSG_CONNECT:
-				reply = handle_op_connect(pool, request);
+				reply = handle_op_connect(request);
 				break;
 			case MSG_GET:
-				reply = handle_op_get(pool, request, session_key);
+				reply = handle_op_get(request, session_id);
 				break;
 			case MSG_GETCONFIG:
-				reply = handle_op_getconfig(pool, request, session_key);
+				reply = handle_op_getconfig(request, session_id);
 				break;
 			case MSG_GETSCHEMA:
-				reply = handle_op_getschema(pool, request, session_key);
+				reply = handle_op_getschema(request, session_id);
 				break;
 			case MSG_EDITCONFIG:
-				reply = handle_op_editconfig(pool, request, session_key);
+				reply = handle_op_editconfig(request, session_id);
 				break;
 			case MSG_COPYCONFIG:
-				reply = handle_op_copyconfig(pool, request, session_key);
+				reply = handle_op_copyconfig(request, session_id);
 				break;
 
 			case MSG_DELETECONFIG:
@@ -2001,25 +1988,25 @@ void * thread_routine (void * arg)
 					ds_type_t = parse_datastore(target);
 				}
 
-				if (ds_type_t == -1) {
+				if ((int)ds_type_t == -1) {
 					reply = create_error("Invalid target repository type requested.");
 					break;
 				}
 				switch(operation) {
 				case MSG_DELETECONFIG:
-					DEBUG("Request: delete-config (session %s)", session_key);
+					DEBUG("Request: delete-config (session %s)", session_id);
 					pthread_mutex_lock(&json_lock);
 					url = get_param_string(request, "url");
 					pthread_mutex_unlock(&json_lock);
-					reply = netconf_deleteconfig(session_key, ds_type_t, url);
+					reply = netconf_deleteconfig(session_id, ds_type_t, url);
 					break;
 				case MSG_LOCK:
-					DEBUG("Request: lock (session %s)", session_key);
-					reply = netconf_lock(session_key, ds_type_t);
+					DEBUG("Request: lock (session %s)", session_id);
+					reply = netconf_lock(session_id, ds_type_t);
 					break;
 				case MSG_UNLOCK:
-					DEBUG("Request: unlock (session %s)", session_key);
-					reply = netconf_unlock(session_key, ds_type_t);
+					DEBUG("Request: unlock (session %s)", session_id);
+					reply = netconf_unlock(session_id, ds_type_t);
 					break;
 				default:
 					reply = create_error("Internal: Unknown request type.");
@@ -2032,25 +2019,25 @@ void * thread_routine (void * arg)
 				}
 				break;
 			case MSG_KILL:
-				reply = handle_op_kill(pool, request, session_key);
+				reply = handle_op_kill(request, session_id);
 				break;
 			case MSG_DISCONNECT:
-				reply = handle_op_disconnect(pool, request, session_key);
+				reply = handle_op_disconnect(request, session_id);
 				break;
 			case MSG_RELOADHELLO:
-				reply = handle_op_reloadhello(pool, request, session_key);
+				reply = handle_op_reloadhello(request, session_id);
 				break;
 			case MSG_INFO:
-				reply = handle_op_info(pool, request, session_key);
+				reply = handle_op_info(request, session_id);
 				break;
 			case MSG_GENERIC:
-				reply = handle_op_generic(pool, request, session_key);
+				reply = handle_op_generic(request, session_id);
 				break;
 			case MSG_NTF_GETHISTORY:
-				reply = handle_op_ntfgethistory(pool, request, session_key);
+				reply = handle_op_ntfgethistory(request, session_id);
 				break;
 			case MSG_VALIDATE:
-				reply = handle_op_validate(pool, request, session_key);
+				reply = handle_op_validate(request, session_id);
 				break;
 			default:
 				DEBUG("Unknown mod_netconf operation requested (%d)", operation);
@@ -2058,7 +2045,6 @@ void * thread_routine (void * arg)
 				break;
 			}
 			/* free parameters */
-			CHECK_AND_FREE(session_key);
 			CHECK_AND_FREE(url);
 			CHECK_AND_FREE(target);
 			request = NULL;
@@ -2123,17 +2109,10 @@ send_reply:
  * During termination of mod_netconf, it is useful to close all remaining
  * sessions. This function iterates over the list of sessions and close them
  * all.
- *
- * \param[in] p  apr pool needed for hash table iterating
- * \param[in] ht  hash table of session_with_mutex structs
  */
-static void close_all_nc_sessions(apr_pool_t *p)
+static void close_all_nc_sessions(void)
 {
-	apr_hash_index_t *hi;
-	void *val = NULL;
 	struct session_with_mutex *swm = NULL;
-	const char *hashed_key = NULL;
-	apr_ssize_t hashed_key_length;
 	int ret;
 
 	/* get exclusive access to sessions_list (conns) */
@@ -2142,20 +2121,11 @@ static void close_all_nc_sessions(apr_pool_t *p)
 		ERROR("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
-	for (hi = apr_hash_first(p, netconf_sessions_list); hi; hi = apr_hash_next(hi)) {
-		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
-		DEBUG("Closing NETCONF session (%s).", hashed_key);
-		swm = (struct session_with_mutex *) val;
-		if (swm != NULL) {
-			DEBUG("LOCK mutex %s", __func__);
-			pthread_mutex_lock(&swm->lock);
-			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
-			DEBUG("UNLOCK mutex %s", __func__);
-			pthread_mutex_unlock(&swm->lock);
+	for (swm = netconf_sessions_list; swm; swm = swm->next) {
+		DEBUG("Closing NETCONF session (%s).", nc_session_get_id(swm->session));
 
-			/* close_and_free_session handles locking on its own */
-			close_and_free_session(swm);
-		}
+        /* close_and_free_session handles locking on its own */
+        close_and_free_session(swm);
 	}
 	/* get exclusive access to sessions_list (conns) */
 	DEBUG("UNLOCK wrlock %s", __func__);
@@ -2164,15 +2134,11 @@ static void close_all_nc_sessions(apr_pool_t *p)
 	}
 }
 
-static void check_timeout_and_close(apr_pool_t *p)
+static void check_timeout_and_close(void)
 {
-	apr_hash_index_t *hi;
-	void *val = NULL;
 	struct nc_session *ns = NULL;
 	struct session_with_mutex *swm = NULL;
-	const char *hashed_key = NULL;
-	apr_ssize_t hashed_key_length;
-	apr_time_t current_time = apr_time_now();
+	time_t current_time = time(NULL);
 	int ret;
 
 	/* get exclusive access to sessions_list (conns) */
@@ -2180,22 +2146,14 @@ static void check_timeout_and_close(apr_pool_t *p)
 		DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
 		return;
 	}
-	for (hi = apr_hash_first(p, netconf_sessions_list); hi; hi = apr_hash_next(hi)) {
-		apr_hash_this(hi, (const void **) &hashed_key, &hashed_key_length, &val);
-		swm = (struct session_with_mutex *) val;
-		if (swm == NULL) {
-			continue;
-		}
+	for (swm = netconf_sessions_list; swm; swm = swm->next) {
 		ns = swm->session;
 		if (ns == NULL) {
 			continue;
 		}
 		pthread_mutex_lock(&swm->lock);
-		if ((current_time - swm->last_activity) > apr_time_from_sec(ACTIVITY_TIMEOUT)) {
-			DEBUG("Closing NETCONF session (%s).", hashed_key);
-			/* remove session from the active sessions list */
-			apr_hash_set(netconf_sessions_list, hashed_key, APR_HASH_KEY_STRING, NULL);
-			pthread_mutex_unlock(&swm->lock);
+		if ((current_time - swm->last_activity) > ACTIVITY_TIMEOUT) {
+			DEBUG("Closing NETCONF session (%s).", nc_session_get_id(swm->session));
 
 			/* close_and_free_session handles locking on its own */
 			close_and_free_session(swm);
@@ -2214,18 +2172,16 @@ static void check_timeout_and_close(apr_pool_t *p)
  * This is actually implementation of NETCONF client
  * - requests are received from UNIX socket in the predefined format
  * - results are replied through the same way
- * - the daemon run as a separate process, but it is started and stopped
- *   automatically by Apache.
+ * - the daemon run as a separate process
  *
  */
-static void forked_proc(apr_pool_t * pool, server_rec * server)
+static void forked_proc(void)
 {
 	struct timeval tv;
 	struct sockaddr_un local, remote;
 	int lsock, client, ret, i, pthread_count = 0;
 	unsigned int olds = 0, timediff = 0;
 	socklen_t len;
-	mod_netconf_cfg *cfg;
 	struct pass_to_thread * arg;
 	pthread_t * ptids = calloc(1, sizeof(pthread_t));
 	struct timespec maxtime;
@@ -2234,8 +2190,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	#ifdef WITH_NOTIFICATIONS
 	char use_notifications = 0;
 	#endif
-
-	http_server = server;
 
 	/* wait at most 5 seconds for every thread to terminate */
 	maxtime.tv_sec = 5;
@@ -2277,17 +2231,6 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	DEBUG("no SU_USER");
 # endif
 #endif
-
-	if (server != NULL) {
-		cfg = ap_get_module_config(server->module_config, &netconf_module);
-		if (cfg == NULL) {
-			ERROR("Getting mod_netconf configuration failed");
-			return;
-		}
-		sockname = cfg->sockname;
-	} else {
-		sockname = SOCKET_FILENAME;
-	}
 
 	/* try to remove if exists */
 	unlink(sockname);
@@ -2336,10 +2279,9 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	}
 
 	/* prepare internal lists */
-	netconf_sessions_list = apr_hash_make(pool);
 
 	#ifdef WITH_NOTIFICATIONS
-	if (notification_init(pool, server) == -1) {
+	if (notification_init() == -1) {
 		ERROR("libwebsockets initialization failed");
 		use_notifications = 0;
 	} else {
@@ -2388,14 +2330,14 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		}
 		#endif
 		if (timediff > ACTIVITY_CHECK_INTERVAL) {
-			check_timeout_and_close(pool);
+			check_timeout_and_close();
 		}
 
 		/* open incoming connection if any */
 		len = sizeof(remote);
 		client = accept(lsock, (struct sockaddr *) &remote, &len);
 		if (client == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-			apr_sleep(SLEEP_TIME);
+			sleep(SLEEP_TIME);
 			continue;
 		} else if (client == -1 && (errno == EINTR)) {
 			continue;
@@ -2407,10 +2349,8 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 		/* set client's socket as non-blocking */
 		//fcntl(client, F_SETFL, fcntl(client, F_GETFL, 0) | O_NONBLOCK);
 
-		arg = malloc (sizeof(struct pass_to_thread));
+		arg = malloc(sizeof(struct pass_to_thread));
 		arg->client = client;
-		arg->pool = pool;
-		arg->server = server;
 		arg->netconf_sessions_list = netconf_sessions_list;
 
 		/* start new thread. It will serve this particular request and then terminate */
@@ -2448,7 +2388,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 	#endif
 
 	/* close all NETCONF sessions */
-	close_all_nc_sessions(pool);
+	close_all_nc_sessions();
 
 	/* destroy rwlock */
 	pthread_rwlock_destroy(&session_lock);
@@ -2458,7 +2398,7 @@ static void forked_proc(apr_pool_t * pool, server_rec * server)
 
 	free(ptids);
 	close(lsock);
-	exit(APR_SUCCESS);
+	exit(0);
 	return;
 error_exit:
 	close(lsock);
@@ -2466,118 +2406,25 @@ error_exit:
 	return;
 }
 
-static void *mod_netconf_create_conf(apr_pool_t * pool, server_rec * s)
-{
-	mod_netconf_cfg *config = apr_pcalloc(pool, sizeof(mod_netconf_cfg));
-	apr_pool_create(&config->pool, pool);
-	config->forkproc = NULL;
-	config->sockname = SOCKET_FILENAME;
-
-	return (void *)config;
-}
-
-#ifndef HTTPD_INDEPENDENT
-static int mod_netconf_master_init(apr_pool_t * pconf, apr_pool_t * ptemp,
-		  apr_pool_t * plog, server_rec * s)
-{
-	mod_netconf_cfg *config;
-	apr_status_t res;
-
-	/* These two help ensure that we only init once. */
-	void *data = NULL;
-	const char *userdata_key = "netconf_ipc_init";
-
-	/*
-	 * The following checks if this routine has been called before.
-	 * This is necessary because the parent process gets initialized
-	 * a couple of times as the server starts up.
-	 */
-	apr_pool_userdata_get(&data, userdata_key, s->process->pool);
-	if (!data) {
-		apr_pool_userdata_set((const void *)1, userdata_key, apr_pool_cleanup_null, s->process->pool);
-		return (OK);
-	}
-
-	DEBUG("creating mod_netconf daemon");
-	config = ap_get_module_config(s->module_config, &netconf_module);
-
-	if (config && config->forkproc == NULL) {
-		config->forkproc = apr_pcalloc(config->pool, sizeof(apr_proc_t));
-		res = apr_proc_fork(config->forkproc, config->pool);
-		switch (res) {
-		case APR_INCHILD:
-			/* set signal handler */
-			apr_signal_init(config->pool);
-			apr_signal(SIGTERM, signal_handler);
-
-			/* log start of the separated NETCONF communication process */
-			DEBUG("mod_netconf daemon started (PID %d)", getpid());
-
-			/* start main loop providing NETCONF communication */
-			forked_proc(config->pool, s);
-
-			/* I never should be here, wtf?!? */
-			DEBUG("mod_netconf daemon unexpectedly stopped");
-			exit(APR_EGENERAL);
-			break;
-		case APR_INPARENT:
-			/* register child to be killed (SIGTERM) when the module config's pool dies */
-			apr_pool_note_subprocess(config->pool, config->forkproc, APR_KILL_AFTER_TIMEOUT);
-			break;
-		default:
-			ERROR("apr_proc_fork() failed");
-			break;
-		}
-	} else {
-		ERROR("mod_netconf misses configuration structure");
-	}
-
-	return OK;
-}
-#endif
-
-/**
- * Register module hooks
- */
-static void mod_netconf_register_hooks(apr_pool_t * p)
-{
-#ifndef HTTPD_INDEPENDENT
-	ap_hook_post_config(mod_netconf_master_init, NULL, NULL, APR_HOOK_LAST);
-#endif
-}
-
-static const char* cfg_set_socket_path(cmd_parms* cmd, void* cfg, const char* arg)
-{
-	((mod_netconf_cfg*)cfg)->sockname = apr_pstrdup(cmd->pool, arg);
-	return NULL;
-}
-
-static const command_rec netconf_cmds[] = {
-		AP_INIT_TAKE1("NetconfSocket", cfg_set_socket_path, NULL, OR_ALL, "UNIX socket path for mod_netconf communication."),
-		{NULL}
-};
-
-/* Dispatch list for API hooks */
-module AP_MODULE_DECLARE_DATA netconf_module = {
-	STANDARD20_MODULE_STUFF,
-	NULL,			/* create per-dir    config structures */
-	NULL,			/* merge  per-dir    config structures */
-	mod_netconf_create_conf,	/* create per-server config structures */
-	NULL,			/* merge  per-server config structures */
-	netconf_cmds,			/* table of config file commands       */
-	mod_netconf_register_hooks	/* register hooks                      */
-};
-
 int main(int argc, char **argv)
 {
-	apr_pool_t *pool;
-	apr_app_initialize(&argc, (char const *const **) &argv, NULL);
-	apr_signal(SIGTERM, signal_handler);
-	apr_signal(SIGINT, signal_handler);
-	apr_pool_create(&pool, NULL);
-	forked_proc(pool, NULL);
-	apr_pool_destroy(pool);
-	apr_terminate();
+    struct sigaction action;
+    sigset_t block_mask;
+
+    if (argc > 1) {
+        sockname = argv[1];
+    } else {
+        sockname = SOCKET_FILENAME;
+    }
+
+	sigfillset (&block_mask);
+    action.sa_handler = signal_handler;
+    action.sa_mask = block_mask;
+    action.sa_flags = 0;
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
+
+	forked_proc();
 	DEBUG("Terminated");
 	return 0;
 }

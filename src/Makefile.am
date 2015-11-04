@@ -16,18 +16,10 @@ dist-hook:
 all: mod_netconf.so webgui-backend
 
 mod_netconf.so: mod_netconf.c notification-server.c
-	$(APXS) $(LIBS) $(CFLAGS) -c -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
-
-install-exec-local: mod_netconf.so
-	if [ "x${httpdmoduledir}" == x ]; then \
-	$(APXS) -i -a mod_netconf.la; else \
-	{ \
-	  mkdir -p "${httpdmoduledir}"; \
-	  $(APXS) -i -S LIBEXECDIR="${httpdmoduledir}" -a mod_netconf.la; } \
-	fi
+	$(CC) $(CFLAGS) -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
 
 webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
-	$(CC) $(LIBS) $(CFLAGS) -DHTTPD_INDEPENDENT  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd  -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
+	$(CC) $(CFLAGS) -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
 
 clean-local:
 	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
