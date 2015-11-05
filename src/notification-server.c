@@ -264,7 +264,7 @@ struct per_session_data__notif_client {
 	struct nc_session *session;
 };
 
-struct session_with_mutex *get_ncsession_from_key(const char *session_id)
+struct session_with_mutex *get_ncsession_from_sid(const char *session_id)
 {
 	struct session_with_mutex *locked_session = NULL;
 	if (session_id == NULL) {
@@ -348,7 +348,7 @@ static void notification_fileprint (time_t eventtime, const char* content)
 		return;
 	}
 	DEBUG("Get session with mutex from key %s.", session_id);
-	target_session = get_ncsession_from_key(session_id);
+	target_session = get_ncsession_from_sid(session_id);
 	if (target_session == NULL) {
 		ERROR("notifications: no session found last_session_key (%s)", session_id);
 		goto unlock_glob;
@@ -531,8 +531,8 @@ static int callback_notification(struct libwebsocket_context *context,
 			DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
 			return -1;
 		}
-		//DEBUG("get session_with_mutex for %s.", pss->session_key);
-		struct session_with_mutex *ls = get_ncsession_from_key(pss->session_id);
+		//DEBUG("get session_with_mutex for %s.", pss->session_id);
+		struct session_with_mutex *ls = get_ncsession_from_sid(pss->session_id);
 		if (ls == NULL) {
 			DEBUG("notification: session not found");
 			if (pthread_rwlock_unlock (&session_lock) != 0) {
@@ -621,10 +621,10 @@ static int callback_notification(struct libwebsocket_context *context,
 				DEBUG("Error while locking rwlock: %d (%s)", errno, strerror(errno));
 				return -1;
 			}
-			DEBUG("get session from key (%s)", pss->session_id);
-			struct session_with_mutex *ls = get_ncsession_from_key(pss->session_id);
+			DEBUG("get session with ID (%s)", pss->session_id);
+			struct session_with_mutex *ls = get_ncsession_from_sid(pss->session_id);
 			if (ls == NULL) {
-				DEBUG("notification: session_key not found (%s)", pss->session_id);
+				DEBUG("notification: session_id not found (%s)", pss->session_id);
 				DEBUG("unlock session lock");
 				if (pthread_rwlock_unlock (&session_lock) != 0) {
 					DEBUG("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
