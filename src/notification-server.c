@@ -271,7 +271,7 @@ struct session_with_mutex *get_ncsession_from_key(const char *session_id)
 		return (NULL);
 	}
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 	return locked_session;
 }

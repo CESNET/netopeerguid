@@ -479,7 +479,7 @@ static int netconf_close(const char *session_id, json_object **reply)
 	}
 	/* remove session from the active sessions list -> nobody new can now work with session */
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 
     if (!locked_session) {
@@ -647,7 +647,7 @@ static json_object *netconf_op(const char *session_id, nc_rpc* rpc, char **recei
 	}
 	/* get session where send the RPC */
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		session = locked_session->session;
@@ -1571,7 +1571,7 @@ json_object *handle_op_reloadhello(json_object *UNUSED(request), const char *ses
 	}
 
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 	if ((locked_session != NULL) && (locked_session->hello_message != NULL)) {
 		DEBUG("LOCK mutex %s", __func__);
@@ -1619,7 +1619,7 @@ json_object *handle_op_info(json_object *UNUSED(request), const char *session_id
 	}
 
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		DEBUG("LOCK mutex %s", __func__);
@@ -1713,7 +1713,7 @@ json_object *handle_op_ntfgethistory(json_object *request, const char *session_i
 	}
 
 	for (locked_session = netconf_sessions_list;
-         strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
          locked_session = locked_session->next);
 	if (locked_session != NULL) {
 		DEBUG("LOCK mutex %s", __func__);
