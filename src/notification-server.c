@@ -560,8 +560,8 @@ static int callback_notification(struct libwebsocket_context *context,
 
         if (ls->notif_count) {
             DEBUG("notification: POP notifications for session");
-            for (i = 0; i < ls->notif_count; ++i) {
-                notif = ls->notifications + i;
+            for (i = ls->notif_count; i; --i) {
+                notif = ls->notifications + i - 1;
 
                 n = 0;
                 pthread_mutex_lock(&json_lock);
@@ -586,6 +586,10 @@ static int callback_notification(struct libwebsocket_context *context,
                 pthread_mutex_unlock(&json_lock);
                 free(notif->content);
             }
+            ls->notif_count = 0;
+            free(ls->notifications);
+            ls->notifications = NULL;
+
             DEBUG("notification: POP notifications done");
         }
 
