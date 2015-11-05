@@ -78,7 +78,7 @@
 #define ACTIVITY_CHECK_INTERVAL	10  /**< timeout in seconds, how often activity is checked */
 #define ACTIVITY_TIMEOUT	(60*60)  /**< timeout in seconds, after this time, session is automaticaly closed. */
 
-/* sleep in master process for non-blocking socket reading */
+/* sleep in master process for non-blocking socket reading, in msec */
 #define SLEEP_TIME 200
 
 #ifndef offsetof
@@ -2334,7 +2334,7 @@ static void forked_proc(void)
 		len = sizeof(remote);
 		client = accept(lsock, (struct sockaddr *) &remote, &len);
 		if (client == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-			sleep(SLEEP_TIME);
+			usleep(SLEEP_TIME * 1000);
 			continue;
 		} else if (client == -1 && (errno == EINTR)) {
 			continue;
