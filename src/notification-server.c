@@ -558,35 +558,36 @@ static int callback_notification(struct libwebsocket_context *context,
 		//DEBUG("lock private lock.");
 		notification_t *notif = NULL;
 
-        DEBUG("notification: POP notifications for session");
+        if (ls->notif_count) {
+            DEBUG("notification: POP notifications for session");
+            for (i = 0; i < ls->notif_count; ++i) {
+                notif = ls->notifications + i;
 
-        for (i = 0; i < ls->notif_count; ++i) {
-            notif = ls->notifications + i;
+                n = 0;
+                pthread_mutex_lock(&json_lock);
+                json_object *notif_json = json_object_new_object();
+                json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
+                json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
+                pthread_mutex_unlock(&json_lock);
 
-            n = 0;
-            pthread_mutex_lock(&json_lock);
-            json_object *notif_json = json_object_new_object();
-            json_object_object_add(notif_json, "eventtime", json_object_new_int64(notif->eventtime));
-            json_object_object_add(notif_json, "content", json_object_new_string(notif->content));
-            pthread_mutex_unlock(&json_lock);
+                const char *msgtext = json_object_to_json_string(notif_json);
 
-            const char *msgtext = json_object_to_json_string(notif_json);
+                //n = sprintf((char *)p, "{\"eventtime\": \"%s\", \"content\": \"notification\"}", t);
+                n = sprintf((char *)p, "%s", msgtext);
+                DEBUG("ws send %dB in %lu", n, sizeof(buf));
+                m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+                if (lws_send_pipe_choked(wsi)) {
+                    libwebsocket_callback_on_writable(context, wsi);
+                    break;
+                }
 
-            //n = sprintf((char *)p, "{\"eventtime\": \"%s\", \"content\": \"notification\"}", t);
-            n = sprintf((char *)p, "%s", msgtext);
-            DEBUG("ws send %dB in %lu", n, sizeof(buf));
-            m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
-            if (lws_send_pipe_choked(wsi)) {
-                libwebsocket_callback_on_writable(context, wsi);
-                break;
+                pthread_mutex_lock(&json_lock);
+                json_object_put(notif_json);
+                pthread_mutex_unlock(&json_lock);
+                free(notif->content);
             }
-
-            pthread_mutex_lock(&json_lock);
-            json_object_put(notif_json);
-            pthread_mutex_unlock(&json_lock);
-            free(notif->content);
+            DEBUG("notification: POP notifications done");
         }
-        DEBUG("notification: POP notifications done");
 
 		//DEBUG("unlock private lock");
 		if (pthread_mutex_unlock(&ls->lock) != 0) {
