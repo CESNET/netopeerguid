@@ -605,15 +605,16 @@ static int callback_notification(struct libwebsocket_context *context,
 		DEBUG("Callback receive.");
 		DEBUG("received: (%s)", (char *)in);
 		if (pss->session_id == NULL) {
-			char session_id_buf[41];
+			char *sid_end;
 			int start = -1;
 			time_t stop = time(NULL) + 30;
 
-			strncpy((char *) session_id_buf, (const char *) in, 40);
-			session_id_buf[40] = '\0';
-			pss->session_id = strdup(session_id_buf);
-			sscanf(in+40, "%d %d", (int *) &start, (int *) &stop);
-			DEBUG("notification: get key (%s) from (%s) (%i,%i)", pss->session_id, (char *) in, (int) start, (int) stop);
+            sid_end = strchr(in, ' ');
+			pss->session_id = strndup(in, sid_end - (char *)in);
+
+            ++sid_end;
+			sscanf(sid_end, "%d %d", (int *) &start, (int *) &stop);
+			DEBUG("notification: SID (%s) from (%s) (%i,%i)", pss->session_id, (char *) in, (int) start, (int) stop);
 
 			DEBUG("lock session lock");
 			if (pthread_rwlock_rdlock (&session_lock) != 0) {
