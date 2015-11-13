@@ -19,7 +19,7 @@ mod_netconf.so: mod_netconf.c notification-server.c
 	$(CC) $(CFLAGS) -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
 
 webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
-	$(CC) $(CFLAGS) -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
+	$(CC) $(CFLAGS) -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
 
 clean-local:
 	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
