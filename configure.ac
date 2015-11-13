@@ -55,11 +55,10 @@ SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
 PKG_CHECK_MODULES([json], [json])
 PKG_CHECK_MODULES([netconf], [libnetconf])
-PKG_CHECK_MODULES([xml], [libxml-2.0])
+PKG_CHECK_MODULES([yang], [libyang])
 AX_PTHREAD([CC="$PTHREAD_CC"], [AC_MSG_ERROR([pthread not found])])
-CFLAGS="-Wall -Wextra $json_CFLAGS $netconf_CFLAGS $xml_CFLAGS $PTHREAD_CFLAGS"
-LIBS="$json_LIBS $netconf_LIBS $xml_LIBS $PTHREAD_LIBS"
-CPPFLAGS="$xml_CPPFLAGS"
+CFLAGS="-Wall -Wextra $json_CFLAGS $netconf_CFLAGS $yang_FLAGS $PTHREAD_CFLAGS"
+LIBS="$json_LIBS $netconf_LIBS $yang_LIBS $PTHREAD_LIBS"
 
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],

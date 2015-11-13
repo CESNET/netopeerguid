@@ -1,6 +1,6 @@
 /*!
  * \file mod_netconf.c
- * \brief NETCONF Apache modul for Netopeer
+ * \brief NETCONF daemon for Netopeer
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \author Radek Krejci <rkrejci@cesnet.cz>
  * \date 2011
@@ -49,7 +49,7 @@
 
 #include <pthread.h>
 #include <json/json.h>
-#include <libssh2.h>
+#include <libyang/libyang.h>
 
 #define UNUSED(x) UNUSED_ ## x __attribute__((__unused__))
 
@@ -59,21 +59,23 @@
 #define CHECK_AND_FREE(pointer) if (pointer != NULL) { free(pointer); pointer = NULL; }
 
 typedef struct notification {
-	time_t eventtime;
-	char* content;
+    time_t eventtime;
+    char* content;
 } notification_t;
 
 struct session_with_mutex {
-	struct nc_session * session; /**< netconf session */
-	notification_t *notifications;
+    struct nc_session *session; /**< netconf session */
+    unsigned int session_key;    /**< unique session identifier throughout all the sessions */
+    notification_t *notifications;
     int notif_count;
-	json_object *hello_message;
-	char ntfc_subscribed; /**< 0 when notifications are not subscribed */
-	char closed; /**< 0 when session is terminated */
-	time_t last_activity;
-	pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
+    json_object *hello_message;
+    char ntfc_subscribed; /**< 0 when notifications are not subscribed */
+    char closed; /**< 0 when session is terminated */
+    time_t last_activity;
+    struct ly_ctx *ctx;
+    pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
 
-	struct session_with_mutex *prev;
+    struct session_with_mutex *prev;
     struct session_with_mutex *next;
 };
 
@@ -82,14 +84,12 @@ struct pass_to_thread {
     struct session_with_mutex *netconf_sessions_list; /**< ?? */
 };
 
-
 extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list from multiple access errors */
 
 extern pthread_key_t err_reply_key;
 extern pthread_mutex_t json_lock;
 
-json_object *create_error(const char *errmess);
-json_object *create_ok();
+json_object *create_error_reply(const char *errmess);
 
 #define DEBUG(...) do { \
     fprintf(stderr, __VA_ARGS__); \
@@ -107,29 +107,28 @@ json_object *err_reply = ((err_reply_p != NULL)?(*err_reply_p):NULL);
 
 #define CHECK_ERR_SET_REPLY \
 if (reply == NULL) { \
-	GETSPEC_ERR_REPLY \
-	if (err_reply != NULL) { \
-		/* use filled err_reply from libnetconf's callback */ \
-		reply = err_reply; \
-	} \
+    GETSPEC_ERR_REPLY \
+    if (err_reply != NULL) { \
+        /* use filled err_reply from libnetconf's callback */ \
+        reply = err_reply; \
+    } \
 }
 
 #define CHECK_ERR_SET_REPLY_ERR(errmsg) \
 if (reply == NULL) { \
-	GETSPEC_ERR_REPLY \
-	if (err_reply == NULL) { \
-		reply = create_error(errmsg); \
-	} else { \
-		/* use filled err_reply from libnetconf's callback */ \
-		reply = err_reply; \
-	} \
+    GETSPEC_ERR_REPLY \
+    if (err_reply == NULL) { \
+        reply = create_error_reply(errmsg); \
+    } else { \
+        /* use filled err_reply from libnetconf's callback */ \
+        reply = err_reply; \
+    } \
 }
 void create_err_reply_p();
 void clean_err_reply();
 void free_err_reply();
 
 NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
-					   int timeout, nc_reply **reply);
+                       int timeout, nc_reply **reply);
 
 #endif
-
