@@ -479,9 +479,9 @@ node_metadata_when(struct lys_when *when, json_object *parent)
 }
 
 static void
-node_metadata_children(struct lys_node *node, json_object *parent)
+node_metadata_children_recursive(struct lys_node *node, json_object **child_array, json_object **choice_array)
 {
-    json_object *child_array = NULL, *choice_array = NULL, *obj;
+    json_object *obj;
     struct lys_node *child;
 
     if (!node->child) {
@@ -489,49 +489,42 @@ node_metadata_children(struct lys_node *node, json_object *parent)
     }
 
     LY_TREE_FOR(node->child, child) {
-        if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML)) {
+        if (child->nodetype == LYS_USES) {
+            node_metadata_children_recursive(child, child_array, choice_array);
+        } else if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML)) {
             obj = json_object_new_string(child->name);
-            if (!child_array) {
-                child_array = json_object_new_array();
+            if (!*child_array) {
+                *child_array = json_object_new_array();
             }
-            json_object_array_add(child_array, obj);
+            json_object_array_add(*child_array, obj);
         } else if (child->nodetype == LYS_CHOICE) {
             obj = json_object_new_string(child->name);
-            if (!choice_array) {
-                choice_array = json_object_new_array();
+            if (!*choice_array) {
+                *choice_array = json_object_new_array();
             }
-            json_object_array_add(choice_array, obj);
+            json_object_array_add(*choice_array, obj);
         }
-    }
-
-    if (child_array) {
-        json_object_object_add(parent, "children", child_array);
-    }
-    if (choice_array) {
-        json_object_object_add(parent, "choice", choice_array);
     }
 }
 
 static void
-node_metadata_cases(struct lys_node_choice *choice, json_object *parent)
+node_metadata_cases_recursive(struct lys_node_choice *choice, json_object *array)
 {
-    json_object *array, *obj;
+    json_object *obj;
     struct lys_node *child;
 
     if (!choice->child) {
         return;
     }
 
-    array = json_object_new_array();
-
     LY_TREE_FOR(choice->child, child) {
-        if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML | LYS_CASE)) {
+        if (child->nodetype == LYS_USES) {
+            node_metadata_cases_recursive((struct lys_node_choice *)child, array);
+        } else if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML | LYS_CASE)) {
             obj = json_object_new_string(child->name);
             json_object_array_add(array, obj);
         }
     }
-
-    json_object_object_add(parent, "cases", array);
 }
 
 static void
@@ -746,7 +739,7 @@ node_metadata_typedef(struct lys_tpdf *tpdf, json_object *parent)
 static void
 node_metadata_container(struct lys_node_container *cont, json_object *parent)
 {
-    json_object *obj;
+    json_object *obj, *child_array = NULL, *choice_array = NULL;
 
     /* element type */
     obj = json_object_new_string("container");
@@ -765,13 +758,19 @@ node_metadata_container(struct lys_node_container *cont, json_object *parent)
     node_metadata_when(cont->when, parent);
 
     /* children & choice */
-    node_metadata_children((struct lys_node *)cont, parent);
+    node_metadata_children_recursive((struct lys_node *)cont, &child_array, &choice_array);
+    if (child_array) {
+        json_object_object_add(parent, "children", child_array);
+    }
+    if (choice_array) {
+        json_object_object_add(parent, "choice", choice_array);
+    }
 }
 
 static void
 node_metadata_choice(struct lys_node_choice *choice, json_object *parent)
 {
-    json_object *obj;
+    json_object *obj, *array;
 
     /* element type */
     obj = json_object_new_string("choice");
@@ -787,7 +786,11 @@ node_metadata_choice(struct lys_node_choice *choice, json_object *parent)
     node_metadata_when(choice->when, parent);
 
     /* cases */
-    node_metadata_cases(choice, parent);
+    if (choice->child) {
+        array = json_object_new_array();
+        node_metadata_cases_recursive(choice, array);
+        json_object_object_add(parent, "cases", array);
+    }
 }
 
 static void
@@ -865,7 +868,7 @@ node_metadata_leaflist(struct lys_node_leaflist *llist, json_object *parent)
 static void
 node_metadata_list(struct lys_node_list *list, json_object *parent)
 {
-    json_object *obj, *array;
+    json_object *obj, *array, *child_array = NULL, *choice_array = NULL;;
     int i;
     unsigned int j;
 
@@ -906,6 +909,15 @@ node_metadata_list(struct lys_node_list *list, json_object *parent)
         }
         json_object_object_add(parent, "unique", array);
     }
+
+    /* children & choice */
+    node_metadata_children_recursive((struct lys_node *)list, &child_array, &choice_array);
+    if (child_array) {
+        json_object_object_add(parent, "children", child_array);
+    }
+    if (choice_array) {
+        json_object_object_add(parent, "choice", choice_array);
+    }
 }
 
 static void
@@ -942,6 +954,100 @@ node_metadata_case(struct lys_node_case *cas, json_object *parent)
 
     /* when */
     node_metadata_when(cas->when, parent);
+}
+
+static void
+node_metadata_rpc(struct lys_node_rpc *rpc, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("rpc");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* description */
+    node_metadata_text(rpc->dsc, "description", parent);
+
+    /* reference */
+    node_metadata_text(rpc->ref, "reference", parent);
+
+    /* status */
+    if (rpc->flags & LYS_STATUS_DEPRC) {
+        obj = json_object_new_string("deprecated");
+    } else if (rpc->flags & LYS_STATUS_OBSLT) {
+        obj = json_object_new_string("obsolete");
+    } else {
+        obj = json_object_new_string("current");
+    }
+    json_object_object_add(parent, "status", obj);
+}
+
+static void
+node_metadata_model(struct lys_module *module, json_object *parent)
+{
+    json_object *obj, *array, *item;
+    int i;
+
+    /* yang-version */
+    if (module->version == 2) {
+        obj = json_object_new_string("1.1");
+    } else {
+        obj = json_object_new_string("1.0");
+    }
+    json_object_object_add(parent, "yang-version", obj);
+
+    /* namespace */
+    node_metadata_text(module->ns, "namespace", parent);
+
+    /* prefix */
+    node_metadata_text(module->prefix, "prefix", parent);
+
+    /* contact */
+    node_metadata_text(module->contact, "contact", parent);
+
+    /* organization */
+    node_metadata_text(module->org, "organization", parent);
+
+    /* revision */
+    if (module->rev_size) {
+        node_metadata_text(module->rev[0].date, "revision", parent);
+    }
+
+    /* description */
+    node_metadata_text(module->dsc, "description", parent);
+
+    /* import */
+    if (module->imp_size) {
+        array = json_object_new_array();
+        for (i = 0; i < module->imp_size; ++i) {
+            item = json_object_new_object();
+
+            node_metadata_text(module->imp[i].module->name, "name", item);
+            node_metadata_text(module->imp[i].prefix, "prefix", item);
+            if (module->imp[i].rev && module->imp[i].rev[0]) {
+                node_metadata_text(module->imp[i].rev, "revision", item);
+            }
+
+            json_object_array_add(array, item);
+        }
+        json_object_object_add(parent, "imports", array);
+    }
+
+    /* include */
+    if (module->inc_size) {
+        array = json_object_new_array();
+        for (i = 0; i < module->inc_size; ++i) {
+            item = json_object_new_object();
+
+            node_metadata_text(module->inc[i].submodule->name, "name", item);
+            if (module->inc[i].rev && module->inc[i].rev[0]) {
+                node_metadata_text(module->inc[i].rev, "revision", item);
+            }
+
+            json_object_array_add(array, item);
+        }
+        json_object_object_add(parent, "includes", array);
+    }
 }
 
 /**
@@ -1930,6 +2036,11 @@ node_add_metadata(struct lys_node *node, struct lys_module *module, json_object 
     json_object *meta_obj;
     char *obj_name;
 
+    if (node->nodetype == LYS_INPUT) {
+        /* silently skipped */
+        return 0;
+    }
+
     cur_module = node->module;
     if (cur_module->type) {
         cur_module = ((struct lys_submodule *)cur_module)->belongsto;
@@ -1941,7 +2052,7 @@ node_add_metadata(struct lys_node *node, struct lys_module *module, json_object 
     }
 
     /* in (leaf-)lists the metadata could have already been added */
-    if (json_object_object_get_ex(parent, obj_name, NULL) == TRUE) {
+    if ((node->nodetype & (LYS_LEAFLIST | LYS_LIST)) && (json_object_object_get_ex(parent, obj_name, NULL) == TRUE)) {
         free(obj_name);
         return 1;
     }
@@ -1970,11 +2081,10 @@ node_add_metadata(struct lys_node *node, struct lys_module *module, json_object 
         case LYS_CASE:
             node_metadata_case((struct lys_node_case *)node, meta_obj);
             break;
-        /* TODO
-        LYS_INPUT
-        LYS_OUTPUT
-        LYS_RPC*/
-        default:
+        case LYS_RPC:
+            node_metadata_rpc((struct lys_node_rpc *)node, meta_obj);
+            break;
+        default: /* LYS_OUTPUT */
             ERROR("Internal: unuxpected nodetype (%s:%d)", __FILE__, __LINE__);
             break;
     }
@@ -2000,6 +2110,10 @@ node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *modul
     json_object *child_json, *list_child_json;
     char *child_name;
     int list_idx;
+
+    if (data_tree->schema->nodetype & (LYS_OUTPUT | LYS_GROUPING)) {
+        return;
+    }
 
     /* add data_tree metadata */
     if (node_add_metadata(data_tree->schema, module, data_json_parent)) {
@@ -2067,6 +2181,19 @@ node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *modul
 }
 
 static void
+node_add_model_metadata(struct lys_module *module, json_object *parent)
+{
+    json_object *obj;
+    char *str;
+
+    obj = json_object_new_object();
+    node_metadata_model(module, obj);
+    asprintf(&str, "$@@%s", module->name);
+    json_object_object_add(parent, str, obj);
+    free(str);
+}
+
+static void
 node_add_children_with_metadata_recursive(struct lys_node *node, struct lys_module *module, json_object *parent)
 {
     struct lys_module *cur_module;
@@ -2074,9 +2201,24 @@ node_add_children_with_metadata_recursive(struct lys_node *node, struct lys_modu
     json_object *node_json;
     char *json_name;
 
+    if (node->nodetype & (LYS_OUTPUT | LYS_GROUPING)) {
+        return;
+    }
+
+    if (node->nodetype & LYS_USES) {
+        cur_module = module;
+        node_json = parent;
+        goto children;
+    }
+
     /* add node metadata */
     if (node_add_metadata(node, module, parent)) {
         ERROR("Internal: metadata duplicate for \"%s\".", node->name);
+        return;
+    }
+
+    /* no other metadata */
+    if (!node->child) {
         return;
     }
 
@@ -2096,6 +2238,7 @@ node_add_children_with_metadata_recursive(struct lys_node *node, struct lys_modu
         free(json_name);
     }
 
+children:
     LY_TREE_FOR(node->child, child) {
         node_add_children_with_metadata_recursive(child, cur_module, node_json);
     }
@@ -2105,6 +2248,7 @@ static json_object *
 libyang_query(unsigned int session_key, const char *filter, int load_children)
 {
     struct lys_node *node;
+    struct lys_module *module = NULL;
     struct session_with_mutex *locked_session;
     json_object *ret = NULL, *data;
 
@@ -2116,29 +2260,44 @@ libyang_query(unsigned int session_key, const char *filter, int load_children)
 
     locked_session->last_activity = time(NULL);
 
-    /* collect schema metadata and create reply */
-    node = ly_ctx_get_node(locked_session->ctx, filter);
+    if (filter[0] == '/') {
+        node = ly_ctx_get_node(locked_session->ctx, filter);
+        if (!node) {
+            ret = create_error_reply("Failed to resolve XPath filter node.");
+            goto finish;
+        }
+    } else {
+        module = ly_ctx_get_module(locked_session->ctx, filter, NULL);
+        if (!module) {
+            ret = create_error_reply("Failed to find model.");
+            goto finish;
+        }
+    }
 
-    if (node) {
-        pthread_mutex_lock(&json_lock);
-        data = json_object_new_object();
+    pthread_mutex_lock(&json_lock);
+    data = json_object_new_object();
 
+    if (module) {
+        node_add_model_metadata(module, data);
+        if (load_children) {
+            LY_TREE_FOR(module->data, node) {
+                node_add_children_with_metadata_recursive(node, NULL, data);
+            }
+        }
+    } else {
         if (load_children) {
             node_add_children_with_metadata_recursive(node, NULL, data);
         } else {
             node_add_metadata(node, NULL, data);
         }
-
-        pthread_mutex_unlock(&json_lock);
-        ret = create_data_reply(json_object_to_json_string(data));
-        json_object_put(data);
-    } else {
-        ret = create_error_reply("Failed to resolve XPath filter node.");
     }
 
-    session_unlock(locked_session);
+    pthread_mutex_unlock(&json_lock);
+    ret = create_data_reply(json_object_to_json_string(data));
+    json_object_put(data);
 
 finish:
+    session_unlock(locked_session);
     return ret;
 }
 
