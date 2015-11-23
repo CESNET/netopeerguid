@@ -119,6 +119,7 @@ static char *netconf_getschema(unsigned int session_key, const char *identifier,
                                const char *format, json_object **err);
 static void node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *module,
                                         json_object *data_json_parent);
+static void node_metadata_typedef(struct lys_tpdf *tpdf, json_object *parent);
 
 static void
 signal_handler(int sign)
@@ -368,6 +369,579 @@ session_unlock(struct session_with_mutex *locked_session)
     pthread_mutex_unlock(&locked_session->lock);
     DEBUG("UNLOCK wrlock %s", __func__);
     pthread_rwlock_unlock(&session_lock);
+}
+
+static void
+node_metadata_text(const char *text, const char *name, json_object *parent)
+{
+    json_object *obj;
+
+    if (!text) {
+        return;
+    }
+
+    obj = json_object_new_string(text);
+    json_object_object_add(parent, name, obj);
+}
+
+static void
+node_metadata_restr(struct lys_restr *restr, const char *name, json_object *parent)
+{
+    json_object *obj;
+
+    if (!restr) {
+        return;
+    }
+
+    obj = json_object_new_string(restr->expr);
+    json_object_object_add(parent, name, obj);
+}
+
+static void
+node_metadata_must(uint8_t must_size, struct lys_restr *must, json_object *parent)
+{
+    uint8_t i;
+    json_object *array, *obj;
+
+    if (!must_size || !must) {
+        return;
+    }
+
+    array = json_object_new_array();
+
+    for (i = 0; i < must_size; ++i) {
+        obj = json_object_new_string(must[i].expr);
+        json_object_array_add(array, obj);
+    }
+
+    json_object_object_add(parent, "must", array);
+}
+
+static void
+node_metadata_basic(struct lys_node *node, json_object *parent)
+{
+    json_object *obj;
+
+    /* description */
+    node_metadata_text(node->dsc, "description", parent);
+
+    /* reference */
+    node_metadata_text(node->ref, "reference", parent);
+
+    /* config */
+    if (node->flags & LYS_CONFIG_R) {
+        obj = json_object_new_boolean(0);
+    } else {
+        obj = json_object_new_boolean(1);
+    }
+    json_object_object_add(parent, "config", obj);
+
+    /* status */
+    if (node->flags & LYS_STATUS_DEPRC) {
+        obj = json_object_new_string("deprecated");
+    } else if (node->flags & LYS_STATUS_OBSLT) {
+        obj = json_object_new_string("obsolete");
+    } else {
+        obj = json_object_new_string("current");
+    }
+    json_object_object_add(parent, "status", obj);
+
+    /* mandatory */
+    if (node->flags & LYS_MAND_TRUE) {
+        obj = json_object_new_boolean(1);
+    } else {
+        obj = json_object_new_boolean(0);
+    }
+    json_object_object_add(parent, "mandatory", obj);
+
+    /* NACM extensions */
+    if (node->nacm) {
+        if (node->nacm & LYS_NACM_DENYW) {
+            obj = json_object_new_string("default-deny-write");
+        } else {
+            obj = json_object_new_string("default-deny-all");
+        }
+        json_object_object_add(parent, "ext", obj);
+    }
+}
+
+static void
+node_metadata_when(struct lys_when *when, json_object *parent)
+{
+    json_object *obj;
+
+    if (!when) {
+        return;
+    }
+
+    obj = json_object_new_string(when->cond);
+    json_object_object_add(parent, "when", obj);
+}
+
+static void
+node_metadata_children(struct lys_node *node, json_object *parent)
+{
+    json_object *child_array = NULL, *choice_array = NULL, *obj;
+    struct lys_node *child;
+
+    if (!node->child) {
+        return;
+    }
+
+    LY_TREE_FOR(node->child, child) {
+        if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML)) {
+            obj = json_object_new_string(child->name);
+            if (!child_array) {
+                child_array = json_object_new_array();
+            }
+            json_object_array_add(child_array, obj);
+        } else if (child->nodetype == LYS_CHOICE) {
+            obj = json_object_new_string(child->name);
+            if (!choice_array) {
+                choice_array = json_object_new_array();
+            }
+            json_object_array_add(choice_array, obj);
+        }
+    }
+
+    if (child_array) {
+        json_object_object_add(parent, "children", child_array);
+    }
+    if (choice_array) {
+        json_object_object_add(parent, "choice", choice_array);
+    }
+}
+
+static void
+node_metadata_cases(struct lys_node_choice *choice, json_object *parent)
+{
+    json_object *array, *obj;
+    struct lys_node *child;
+
+    if (!choice->child) {
+        return;
+    }
+
+    array = json_object_new_array();
+
+    LY_TREE_FOR(choice->child, child) {
+        if (child->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML | LYS_CASE)) {
+            obj = json_object_new_string(child->name);
+            json_object_array_add(array, obj);
+        }
+    }
+
+    json_object_object_add(parent, "cases", array);
+}
+
+static void
+node_metadata_min_max(uint32_t min, uint32_t max, json_object *parent)
+{
+    json_object *obj;
+
+    if (min) {
+        obj = json_object_new_int(min);
+        json_object_object_add(parent, "min-elements", obj);
+    }
+
+    if (max) {
+        obj = json_object_new_int(max);
+        json_object_object_add(parent, "max-elements", obj);
+    }
+}
+
+static void
+node_metadata_ident_recursive(struct lys_ident *ident, json_object *array)
+{
+    struct lys_ident_der *cur;
+    json_object *obj;
+
+    if (!ident) {
+        return;
+    }
+
+    obj = json_object_new_string(ident->name);
+    json_object_array_add(array, obj);
+
+    for (cur = ident->der; cur; cur = cur->next) {
+        node_metadata_ident_recursive(cur->ident, array);
+    }
+}
+
+static void
+node_metadata_type(struct lys_type *type, struct lys_module *module, json_object *parent)
+{
+    json_object *obj, *array, *item;
+    char *str;
+    int i;
+
+    /* built-in YANG type */
+    if (!type->der->module) {
+        switch (type->base) {
+        case LY_TYPE_BINARY:
+            node_metadata_text("binary", "type", parent);
+            node_metadata_restr(type->info.binary.length, "length", parent);
+            break;
+        case LY_TYPE_BITS:
+            node_metadata_text("bits", "type", parent);
+
+            array = json_object_new_array();
+            for (i = 0; i < type->info.bits.count; ++i) {
+                item = json_object_new_object();
+                obj = json_object_new_string(type->info.bits.bit[i].name);
+                json_object_object_add(item, "name", obj);
+                obj = json_object_new_int(type->info.bits.bit[i].pos);
+                json_object_object_add(item, "position", obj);
+                json_object_array_add(array, item);
+            }
+            json_object_object_add(parent, "bits", array);
+            break;
+        case LY_TYPE_BOOL:
+            node_metadata_text("bool", "type", parent);
+            break;
+        case LY_TYPE_DEC64:
+            node_metadata_text("decimal64", "type", parent);
+            node_metadata_restr(type->info.dec64.range, "range", parent);
+            obj = json_object_new_int(type->info.dec64.dig);
+            json_object_object_add(parent, "fraction-digits", obj);
+            break;
+        case LY_TYPE_EMPTY:
+            node_metadata_text("empty", "type", parent);
+            break;
+        case LY_TYPE_ENUM:
+            node_metadata_text("enumeration", "type", parent);
+
+            array = json_object_new_array();
+            for (i = 0; i < type->info.enums.count; ++i) {
+                obj = json_object_new_string(type->info.enums.enm[i].name);
+                json_object_array_add(array, obj);
+            }
+            json_object_object_add(parent, "enumval", array);
+            break;
+        case LY_TYPE_IDENT:
+            node_metadata_text("identityref", "type", parent);
+
+            array = json_object_new_array();
+            node_metadata_ident_recursive(type->info.ident.ref, array);
+            json_object_object_add(parent, "identityval", array);
+            break;
+        case LY_TYPE_INST:
+            node_metadata_text("instance-identifier", "type", parent);
+            if (type->info.inst.req == -1) {
+                obj = json_object_new_boolean(0);
+            } else {
+                obj = json_object_new_boolean(1);
+            }
+            json_object_object_add(parent, "require-instance", obj);
+            break;
+        case LY_TYPE_LEAFREF:
+            node_metadata_text("leafref", "type", parent);
+            node_metadata_text(type->info.lref.path, "path", parent);
+            break;
+        case LY_TYPE_STRING:
+            node_metadata_text("string", "type", parent);
+            node_metadata_restr(type->info.str.length, "length", parent);
+            if (type->info.str.pat_count) {
+                array = json_object_new_array();
+                for (i = 0; i < type->info.str.pat_count; ++i) {
+                    obj = json_object_new_string(type->info.str.patterns[i].expr);
+                    json_object_array_add(array, obj);
+                }
+                json_object_object_add(parent, "pattern", array);
+            }
+            break;
+        case LY_TYPE_UNION:
+            node_metadata_text("union", "type", parent);
+            array = json_object_new_array();
+            for (i = 0; i < type->info.uni.count; ++i) {
+                obj = json_object_new_object();
+                node_metadata_type(&type->info.uni.types[i], module, obj);
+                json_object_array_add(array, obj);
+            }
+            json_object_object_add(parent, "types", array);
+            break;
+        case LY_TYPE_INT8:
+            node_metadata_text("int8", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_UINT8:
+            node_metadata_text("uint8", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_INT16:
+            node_metadata_text("int16", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_UINT16:
+            node_metadata_text("uint16", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_INT32:
+            node_metadata_text("int32", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_UINT32:
+            node_metadata_text("uint32", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_INT64:
+            node_metadata_text("int64", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        case LY_TYPE_UINT64:
+            node_metadata_text("uint64", "type", parent);
+            node_metadata_restr(type->info.num.range, "range", parent);
+            break;
+        default:
+            ERROR("Internal: unknown type (%s:%d)", __FILE__, __LINE__);
+            break;
+        }
+
+    /* typedef */
+    } else {
+        if (!module || !type->module_name || !strcmp(type->module_name, module->name)) {
+            node_metadata_text(type->der->name, "type", parent);
+        } else {
+            asprintf(&str, "%s:%s", type->module_name, type->der->name);
+            node_metadata_text(str, "type", parent);
+            free(str);
+        }
+        obj = json_object_new_object();
+        node_metadata_typedef(type->der, obj);
+        json_object_object_add(parent, "typedef", obj);
+    }
+}
+
+static void
+node_metadata_typedef(struct lys_tpdf *tpdf, json_object *parent)
+{
+    json_object *obj;
+
+    /* description */
+    node_metadata_text(tpdf->dsc, "description", parent);
+
+    /* reference */
+    node_metadata_text(tpdf->ref, "reference", parent);
+
+    /* status */
+    if (tpdf->flags & LYS_STATUS_DEPRC) {
+        obj = json_object_new_string("deprecated");
+    } else if (tpdf->flags & LYS_STATUS_OBSLT) {
+        obj = json_object_new_string("obsolete");
+    } else {
+        obj = json_object_new_string("current");
+    }
+    json_object_object_add(parent, "status", obj);
+
+    /* type */
+    node_metadata_type(&tpdf->type, tpdf->module, parent);
+
+    /* units */
+    node_metadata_text(tpdf->units, "units", parent);
+
+    /* default */
+    node_metadata_text(tpdf->dflt, "default", parent);
+}
+
+static void
+node_metadata_container(struct lys_node_container *cont, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("container");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)cont, parent);
+
+    /* must */
+    node_metadata_must(cont->must_size, cont->must, parent);
+
+    /* presence */
+    node_metadata_text(cont->presence, "presence", parent);
+
+    /* when */
+    node_metadata_when(cont->when, parent);
+
+    /* children & choice */
+    node_metadata_children((struct lys_node *)cont, parent);
+}
+
+static void
+node_metadata_choice(struct lys_node_choice *choice, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("choice");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)choice, parent);
+
+    /* default */
+    node_metadata_text(choice->dflt->name, "default", parent);
+
+    /* when */
+    node_metadata_when(choice->when, parent);
+
+    /* cases */
+    node_metadata_cases(choice, parent);
+}
+
+static void
+node_metadata_leaf(struct lys_node_leaf *leaf, json_object *parent)
+{
+    json_object *obj;
+    struct lys_node_list *list;
+    int is_key, i;
+
+    /* element type */
+    obj = json_object_new_string("leaf");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)leaf, parent);
+
+    /* type */
+    node_metadata_type(&leaf->type, leaf->module, parent);
+
+    /* units */
+    node_metadata_text(leaf->units, "units", parent);
+
+    /* default */
+    node_metadata_text(leaf->dflt, "default", parent);
+
+    /* must */
+    node_metadata_must(leaf->must_size, leaf->must, parent);
+
+    /* when */
+    node_metadata_when(leaf->when, parent);
+
+    /* iskey */
+    is_key = 0;
+    list = (struct lys_node_list *)lys_parent((struct lys_node *)leaf);
+    if (list && (list->nodetype == LYS_LIST)) {
+        for (i = 0; i < list->keys_size; ++i) {
+            if (list->keys[i] == leaf) {
+                is_key = 1;
+                break;
+            }
+        }
+    }
+    obj = json_object_new_boolean(is_key);
+    json_object_object_add(parent, "iskey", obj);
+}
+
+static void
+node_metadata_leaflist(struct lys_node_leaflist *llist, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("leaf-list");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)llist, parent);
+
+    /* type */
+    node_metadata_type(&llist->type, llist->module, parent);
+
+    /* units */
+    node_metadata_text(llist->units, "units", parent);
+
+    /* must */
+    node_metadata_must(llist->must_size, llist->must, parent);
+
+    /* when */
+    node_metadata_when(llist->when, parent);
+
+    /* min/max-elements */
+    node_metadata_min_max(llist->min, llist->max, parent);
+}
+
+static void
+node_metadata_list(struct lys_node_list *list, json_object *parent)
+{
+    json_object *obj, *array;
+    int i;
+    unsigned int j;
+
+    /* element type */
+    obj = json_object_new_string("list");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)list, parent);
+
+    /* must */
+    node_metadata_must(list->must_size, list->must, parent);
+
+    /* when */
+    node_metadata_when(list->when, parent);
+
+    /* min/max-elements */
+    node_metadata_min_max(list->min, list->max, parent);
+
+    /* keys */
+    if (list->keys_size) {
+        array = json_object_new_array();
+        for (i = 0; i < list->keys_size; ++i) {
+            obj = json_object_new_string(list->keys[i]->name);
+            json_object_array_add(array, obj);
+        }
+        json_object_object_add(parent, "keys", array);
+    }
+
+    /* unique */
+    if (list->unique_size) {
+        array = json_object_new_array();
+        for (i = 0; i < list->unique_size; ++i) {
+            for (j = 0; j < list->unique[i].expr_size; ++j) {
+                obj = json_object_new_string(list->unique[i].expr[j]);
+                json_object_array_add(array, obj);
+            }
+        }
+        json_object_object_add(parent, "unique", array);
+    }
+}
+
+static void
+node_metadata_anyxml(struct lys_node_anyxml *anyxml, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("anyxml");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)anyxml, parent);
+
+    /* must */
+    node_metadata_must(anyxml->must_size, anyxml->must, parent);
+
+    /* when */
+    node_metadata_when(anyxml->when, parent);
+
+}
+
+static void
+node_metadata_case(struct lys_node_case *cas, json_object *parent)
+{
+    json_object *obj;
+
+    /* element type */
+    obj = json_object_new_string("case");
+    json_object_object_add(parent, "eltype", obj);
+
+    /* shared info */
+    node_metadata_basic((struct lys_node *)cas, parent);
+
+    /* when */
+    node_metadata_when(cas->when, parent);
 }
 
 /**
@@ -1349,60 +1923,6 @@ netconf_generic(unsigned int session_key, const char *content, char **data)
     return res;
 }
 
-static void
-node_metadata_children(struct lys_node *node, json_object *parent)
-{
-    json_object *array, *array_item;
-    struct lys_node *child;
-
-    array = json_object_new_array();
-
-    LY_TREE_FOR(node->child, child) {
-        array_item = json_object_new_string(child->name);
-        json_object_array_add(array, array_item);
-    }
-
-    json_object_object_add(parent, "children", array);
-}
-
-static void
-node_metadata_container(struct lys_node_container *cont, json_object *parent)
-{
-    json_object *obj;
-
-    /* element type */
-    obj = json_object_new_string("container");
-    json_object_object_add(parent, "eltype", obj);
-
-    /* config */
-    if (cont->flags & LYS_CONFIG_R) {
-        obj = json_object_new_boolean(0);
-    } else {
-        obj = json_object_new_boolean(1);
-    }
-    json_object_object_add(parent, "config", obj);
-
-    /* TODO */
-    /* description */
-
-    /* if-feature */
-
-    /* must */
-
-    /* presence */
-
-    /* reference */
-
-    /* status */
-
-    /* typedef */
-
-    /* when */
-
-    /* children */
-    node_metadata_children((struct lys_node *)cont, parent);
-}
-
 static int
 node_add_metadata(struct lys_node *node, struct lys_module *module, json_object *parent)
 {
@@ -1432,19 +1952,31 @@ node_add_metadata(struct lys_node *node, struct lys_module *module, json_object 
         case LYS_CONTAINER:
             node_metadata_container((struct lys_node_container *)node, meta_obj);
             break;
-        /* TODO LYS_AUGMENT
-        LYS_CHOICE
-        LYS_LEAF
-        LYS_LEAFLIST
-        LYS_LIST
-        LYS_ANYXML
-        LYS_GROUPING
-        LYS_CASE
+        case LYS_CHOICE:
+            node_metadata_choice((struct lys_node_choice *)node, meta_obj);
+            break;
+        case LYS_LEAF:
+            node_metadata_leaf((struct lys_node_leaf *)node, meta_obj);
+            break;
+        case LYS_LEAFLIST:
+            node_metadata_leaflist((struct lys_node_leaflist *)node, meta_obj);
+            break;
+        case LYS_LIST:
+            node_metadata_list((struct lys_node_list *)node, meta_obj);
+            break;
+        case LYS_ANYXML:
+            node_metadata_anyxml((struct lys_node_anyxml *)node, meta_obj);
+            break;
+        case LYS_CASE:
+            node_metadata_case((struct lys_node_case *)node, meta_obj);
+            break;
+        /* TODO
         LYS_INPUT
         LYS_OUTPUT
-        LYS_NOTIF
-        LYS_RPC
-        LYS_USES*/
+        LYS_RPC*/
+        default:
+            ERROR("Internal: unuxpected nodetype (%s:%d)", __FILE__, __LINE__);
+            break;
     }
 
     /* just a precaution */
