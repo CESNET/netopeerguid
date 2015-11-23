@@ -22,7 +22,7 @@ webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
 	$(CC) $(CFLAGS) -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c $(LIBS)
 
 clean-local:
-	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
+	rm -rf .libs *.la *.lo *.slo webgui-backend
 
 distclean-local:
 	rm -rf $(RPMDIR)
