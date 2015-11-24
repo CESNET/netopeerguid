@@ -363,6 +363,18 @@ wrlock_fail:
 }
 
 static void
+session_user_activity(const char *username)
+{
+    struct session_with_mutex *sess;
+
+    for (sess = netconf_sessions_list; sess; sess = sess->next) {
+        if (!strcmp(nc_session_get_user(sess->session), username)) {
+            sess->last_activity = time(NULL);
+        }
+    }
+}
+
+static void
 session_unlock(struct session_with_mutex *locked_session)
 {
     DEBUG("UNLOCK mutex %s", __func__);
@@ -1357,7 +1369,6 @@ netconf_connect(const char *host, const char *port, const char *user, const char
             return 0;
         }
         locked_session->session = session;
-        locked_session->last_activity = time(NULL);
         locked_session->hello_message = NULL;
         locked_session->closed = 0;
         pthread_mutex_init(&locked_session->lock, NULL);
@@ -1379,7 +1390,7 @@ netconf_connect(const char *host, const char *port, const char *user, const char
             last_session->next = locked_session;
             locked_session->prev = last_session;
         }
-        DEBUG("Before session_unlock");
+        session_user_activity(nc_session_get_user(locked_session->session));
 
         /* no need to lock session, noone can read it while we have wrlock */
 
@@ -1403,6 +1414,7 @@ netconf_connect(const char *host, const char *port, const char *user, const char
             session_key_generator = 1;
         }
 
+        DEBUG("Before session_unlock");
         /* unlock session list */
         DEBUG("UNLOCK wrlock %s", __func__);
         if (pthread_rwlock_unlock(&session_lock) != 0) {
@@ -1640,7 +1652,7 @@ netconf_op(unsigned int session_key, nc_rpc *rpc, char **received_data)
         goto finished;
     }
 
-    locked_session->last_activity = time(NULL);
+    session_user_activity(nc_session_get_user(locked_session->session));
 
     /* send the request and get the reply */
     msgt = netconf_send_recv_timed(locked_session->session, rpc, 2000000, &reply);
@@ -2258,7 +2270,7 @@ libyang_query(unsigned int session_key, const char *filter, int load_children)
         goto finish;
     }
 
-    locked_session->last_activity = time(NULL);
+    session_user_activity(nc_session_get_user(locked_session->session));
 
     if (filter[0] == '/') {
         node = ly_ctx_get_node(locked_session->ctx, filter);
@@ -2315,7 +2327,7 @@ libyang_merge(unsigned int session_key, const char *config)
         goto finish;
     }
 
-    locked_session->last_activity = time(NULL);
+    session_user_activity(nc_session_get_user(locked_session->session));
 
     data_tree = lyd_parse(locked_session->ctx, config, LYD_JSON, LYD_OPT_STRICT);
     if (!data_tree) {
