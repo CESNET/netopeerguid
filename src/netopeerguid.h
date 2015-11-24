@@ -3,13 +3,15 @@
  * \brief NETCONF daemon for Netopeer
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \author Radek Krejci <rkrejci@cesnet.cz>
+ * \author Michal Vasko <mvasko@cesnet.cz>
  * \date 2011
  * \date 2012
  * \date 2013
  * \date 2014
+ * \date 2015
  */
 /*
- * Copyright (C) 2011-2014 CESNET
+ * Copyright (C) 2011-2015 CESNET
  *
  * LICENSE TERMS
  *

@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.63])
-AC_INIT([mod_netconf], [1.0.2], [cejkat@cesnet.cz])
+AC_INIT([netopeerguid], [1.0.2], [mvasko@cesnet.cz])
 AM_INIT_AUTOMAKE([silent-rules])
 AM_SILENT_RULES([yes])
 
@@ -40,8 +40,6 @@ AC_SUBST([CHOWN_GROUP])
 
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
-AC_CHECK_PROG(HTTPD, [httpd], [yes], [""])
-AC_PATH_PROGS(APACHECTL, apachectl apache2ctl, no, [$PATH:/usr/sbin])
 
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, rpmbuild, rpmbuild, [""])
@@ -85,7 +83,8 @@ AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 
 AC_CONFIG_FILES([Makefile
                 config.h
-		mod_netconf.spec
+		netopeerguid.spec
+		src/netopeerguid.rc
 		src/Makefile
 		])
 AC_OUTPUT

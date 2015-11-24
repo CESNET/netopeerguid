@@ -57,7 +57,7 @@
 #include <ctype.h>
 #include "message_type.h"
 
-#define SOCKET_FILENAME "/var/run/mod_netconf.sock"
+#define SOCKET_FILENAME "/var/run/netopeerguid.sock"
 #define BUFFER_SIZE 40960
 
 void print_help(char* progname)

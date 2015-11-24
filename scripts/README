@@ -1,6 +1,5 @@
 phpmynetconf.php is an example script
 that uses /tmp/mod_netconf.sock socket
-created by mod_netconf.
 
 Installation:
 copy phpmynetconf.php into web-accessible

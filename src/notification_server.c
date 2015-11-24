@@ -33,8 +33,8 @@
 #include <libnetconf.h>
 #include <libwebsockets.h>
 
-#include "notification_module.h"
-#include "mod_netconf.h"
+#include "notification_server.h"
+#include "netopeerguid.h"
 #include "../config.h"
 
 #ifdef TEST_NOTIFICATION_SERVER

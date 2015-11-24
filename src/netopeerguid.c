@@ -3,12 +3,14 @@
  * \brief NETCONF Apache modul for Netopeer
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \author Radek Krejci <rkrejci@cesnet.cz>
+ * \author Michal Vasko <mvasko@cesnet.cz>
  * \date 2011
  * \date 2012
  * \date 2013
+ * \date 2015
  */
 /*
- * Copyright (C) 2011-2013 CESNET
+ * Copyright (C) 2011-2015 CESNET
  *
  * LICENSE TERMS
  *
@@ -67,15 +69,15 @@
 #include "../config.h"
 
 #ifdef WITH_NOTIFICATIONS
-#include "notification_module.h"
+#include "notification_server.h"
 #endif
 
 #include "message_type.h"
-#include "mod_netconf.h"
+#include "netopeerguid.h"
 
 #define SCHEMA_DIR "/tmp/yang_models"
 #define MAX_PROCS 5
-#define SOCKET_FILENAME "/var/run/mod_netconf.sock"
+#define SOCKET_FILENAME "/var/run/netopeerguid.sock"
 #define MAX_SOCKET_CL 10
 #define BUFFER_SIZE 4096
 #define ACTIVITY_CHECK_INTERVAL 10  /**< timeout in seconds, how often activity is checked */
@@ -1273,7 +1275,7 @@ prepare_context(struct session_with_mutex *session)
 
         session->ctx = ly_ctx_new(SCHEMA_DIR);
     } else {
-        /* TODO */
+        /* TODO try to load models from a local directory */
         session->ctx = ly_ctx_new(NULL);
     }
 
@@ -1431,6 +1433,8 @@ netconf_connect(const char *host, const char *port, const char *user, const char
 static int
 close_and_free_session(struct session_with_mutex *locked_session)
 {
+    int i;
+
     DEBUG("lock private lock.");
     DEBUG("LOCK mutex %s", __func__);
     if (pthread_mutex_lock(&locked_session->lock) != 0) {
@@ -1454,7 +1458,9 @@ close_and_free_session(struct session_with_mutex *locked_session)
     usleep(500000); /* let notification thread stop */
 
     /* session shouldn't be used by now */
-    /** \todo free all notifications from queue */
+    for (i = 0; i < locked_session->notif_count; ++i) {
+        free(locked_session->notifications[i].content);
+    }
     free(locked_session->notifications);
     pthread_mutex_destroy(&locked_session->lock);
     if (locked_session->hello_message != NULL) {
@@ -2023,16 +2029,13 @@ netconf_generic(unsigned int session_key, const char *content, char **data)
     nc_rpc* rpc = NULL;
     json_object *res = NULL;
 
+    assert(!data || !*data);
+
     /* create requests */
     rpc = nc_rpc_generic(content);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
-    }
-
-    if (data != NULL) {
-        // TODO ?free(*data);
-        (*data) = NULL;
     }
 
     /* get session where send the RPC */
@@ -4042,11 +4045,28 @@ main(int argc, char **argv)
 {
     struct sigaction action;
     sigset_t block_mask;
+    int daemonize = 0, i;
 
-    if (argc > 1) {
-        sockname = argv[1];
-    } else {
-        sockname = SOCKET_FILENAME;
+    if (argc > 3) {
+        printf("Usage: [--(h)elp] [--(d)aemon] [socket-path]\n");
+        return 1;
+    }
+
+    sockname = SOCKET_FILENAME;
+    for (i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("Usage: [--(h)elp] [--(d)aemon] [socket-path]\n");
+            return 0;
+        } else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--daemon")) {
+            daemonize = 1;
+        } else {
+            sockname = argv[i];
+        }
+    }
+
+    if (daemonize && (daemon(0, 0) == -1)) {
+        ERROR("daemon() failed (%s)", strerror(errno));
+        return 1;
     }
 
     sigfillset(&block_mask);
