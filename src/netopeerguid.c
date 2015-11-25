@@ -1318,7 +1318,7 @@ loop:
         } else {
             module = ly_ctx_get_module(session->ctx, model_name, revision);
             if (!module) {
-                module = ly_ctx_load_module(session->ctx, NULL, model_name, revision);
+                module = ly_ctx_load_module(session->ctx, model_name, revision);
                 if (module) {
                     if (!strcmp(module->name, "ietf-netconf")) {
                         ctx_enable_capabs(module, array);
