@@ -1,5 +1,5 @@
 /*!
- * \file notification_module.h
+ * \file notification_server.h
  * \brief
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \date 2013

@@ -1,6 +1,6 @@
 /*!
- * \file mod_netconf.c
- * \brief NETCONF daemon for Netopeer
+ * \file netopeerguid.h
+ * \brief NETCONF daemon header for NetopeerGUI
  * \author Tomas Cejka <cejkat@cesnet.cz>
  * \author Radek Krejci <rkrejci@cesnet.cz>
  * \author Michal Vasko <mvasko@cesnet.cz>
