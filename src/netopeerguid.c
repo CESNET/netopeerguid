@@ -1349,13 +1349,20 @@ loop:
  * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
  */
 static unsigned int
-netconf_connect(const char *host, const char *port, const char *user, const char *pass, struct nc_cpblts *cpblts)
+netconf_connect(const char *host, const char *port, const char *user, const char *pass, const char *privkey, struct nc_cpblts *cpblts)
 {
     struct nc_session* session = NULL;
     struct session_with_mutex *locked_session, *last_session;
+    char *pubkey;
 
     /* connect to the requested NETCONF server */
     password = (char*)pass;
+    if (privkey) {
+        nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, 3);
+        asprintf(&pubkey, "%s.pub", privkey);
+        nc_set_keypair_path(privkey, pubkey);
+        free(pubkey);
+    }
     DEBUG("prepare to connect %s@%s:%s", user, host, port);
     session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
     DEBUG("nc_session_connect done");
@@ -2594,6 +2601,7 @@ handle_op_connect(json_object *request)
     char *port = NULL;
     char *user = NULL;
     char *pass = NULL;
+    char *privkey = NULL;
     json_object *reply = NULL;
     unsigned int session_key = 0;
     struct nc_cpblts* cpblts = NULL;
@@ -2605,15 +2613,20 @@ handle_op_connect(json_object *request)
     port = get_param_string(request, "port");
     user = get_param_string(request, "user");
     pass = get_param_string(request, "pass");
+    privkey = get_param_string(request, "privatekey");
 
     pthread_mutex_unlock(&json_lock);
 
+    if (host == NULL) {
+        host = "localhost";
+    }
+
     DEBUG("host: %s, port: %s, user: %s", host, port, user);
-    if ((host == NULL) || (user == NULL)) {
+    if (user == NULL) {
         ERROR("Cannot connect - insufficient input.");
         session_key = 0;
     } else {
-        session_key = netconf_connect(host, port, user, pass, cpblts);
+        session_key = netconf_connect(host, port, user, pass, privkey, cpblts);
         DEBUG("Session key: %u", session_key);
     }
     if (cpblts != NULL) {
@@ -2647,6 +2660,7 @@ handle_op_connect(json_object *request)
     CHECK_AND_FREE(user);
     CHECK_AND_FREE(port);
     CHECK_AND_FREE(pass);
+    CHECK_AND_FREE(privkey);
     return reply;
 }
 
