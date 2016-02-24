@@ -52,11 +52,11 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
 PKG_CHECK_MODULES([json], [json])
-PKG_CHECK_MODULES([netconf], [libnetconf])
+PKG_CHECK_MODULES([netconf2], [libnetconf2])
 PKG_CHECK_MODULES([yang], [libyang])
 AX_PTHREAD([CC="$PTHREAD_CC"], [AC_MSG_ERROR([pthread not found])])
-CFLAGS="-Wall -Wextra $json_CFLAGS $netconf_CFLAGS $yang_FLAGS $PTHREAD_CFLAGS"
-LIBS="$json_LIBS $netconf_LIBS $yang_LIBS $PTHREAD_LIBS"
+CFLAGS="-Wall -Wextra $json_CFLAGS $netconf2_CFLAGS $yang_FLAGS $PTHREAD_CFLAGS"
+LIBS="$json_LIBS $netconf2_LIBS $yang_LIBS $PTHREAD_LIBS"
 
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],

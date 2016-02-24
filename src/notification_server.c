@@ -30,7 +30,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <errno.h>
-#include <libnetconf.h>
+#include <nc_client.h>
 #include <libwebsockets.h>
 
 #include "notification_server.h"
@@ -271,22 +271,22 @@ struct session_with_mutex *get_ncsession_from_sid(const char *session_id)
 		return (NULL);
 	}
 	for (locked_session = netconf_sessions_list;
-         locked_session && strcmp(nc_session_get_id(locked_session->session), session_id);
+         locked_session && (nc_session_get_id(locked_session->session) == (unsigned)atoi(session_id));
          locked_session = locked_session->next);
 	return locked_session;
 }
 
 /* rpc parameter is freed after the function call */
-static int send_recv_process(struct nc_session *session, const char* UNUSED(operation), nc_rpc* rpc)
+static int send_recv_process(struct nc_session *session, const char* UNUSED(operation), struct nc_rpc* rpc)
 {
-	nc_reply *reply = NULL;
+	struct nc_reply *reply = NULL;
 	char *data = NULL;
 	int ret = EXIT_SUCCESS;
 
 	/* send the request and get the reply */
-	switch (nc_session_send_recv(session, rpc, &reply)) {
-	case NC_MSG_UNKNOWN:
-		if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+	switch (netconf_send_recv_timed(session, rpc, 50000, 0, &reply)) {
+	case NC_MSG_ERROR:
+		if (nc_session_get_status(session) != NC_STATUS_RUNNING) {
 			ERROR("notifications: receiving rpc-reply failed.");
 			//cmd_disconnect(NULL);
 			ret = EXIT_FAILURE;
@@ -299,14 +299,15 @@ static int send_recv_process(struct nc_session *session, const char* UNUSED(oper
 		/* error occurred, but processed by callback */
 		break;
 	case NC_MSG_REPLY:
-		switch (nc_reply_get_type(reply)) {
-		case NC_REPLY_OK:
+		switch (reply->type) {
+		case NC_RPL_OK:
 			break;
-		case NC_REPLY_DATA:
-			DEBUG("notifications: recv: %s.", data = nc_reply_get_data (reply));
-			free(data);
+		case NC_RPL_DATA:
+            lyd_print_mem(&data, ((struct nc_reply_data *)reply)->data, LYD_JSON, 0);
+			DEBUG("notifications: recv: %s.", data);
+            free(data);
 			break;
-		case NC_REPLY_ERROR:
+		case NC_RPL_ERROR:
 			/* wtf, you shouldn't be here !?!? */
 			DEBUG("notifications: operation failed, but rpc-error was not processed.");
 			ret = EXIT_FAILURE;
@@ -333,11 +334,17 @@ static int send_recv_process(struct nc_session *session, const char* UNUSED(oper
  * \param [in] eventtime - time when notification occured
  * \param [in] content - content of notification
  */
-static void notification_fileprint (time_t eventtime, const char* content)
+static void notification_fileprint(struct nc_session *session, const struct nc_notif *notif)
 {
+    time_t eventtime;
 	struct session_with_mutex *target_session = NULL;
 	notification_t *ntf = NULL;
 	const char *session_id = NULL;
+    char *content;
+    (void)session;
+
+    eventtime = nc_datetime2time(notif->datetime);
+    lyd_print_mem(&content, notif->tree, LYD_JSON, 0);
 
 	DEBUG("Accepted notif: %lu %s\n", (unsigned long int) eventtime, content);
 
@@ -345,12 +352,14 @@ static void notification_fileprint (time_t eventtime, const char* content)
 	DEBUG("notification: fileprint getspecific (%s)", session_id);
 	if (pthread_rwlock_wrlock(&session_lock) != 0) {
 		ERROR("notifications: Error while locking rwlock");
+        free(content);
 		return;
 	}
 	DEBUG("Get session with mutex from key %s.", session_id);
 	target_session = get_ncsession_from_sid(session_id);
 	if (target_session == NULL) {
 		ERROR("notifications: no session found last_session_key (%s)", session_id);
+        free(content);
 		goto unlock_glob;
 	}
 	if (pthread_mutex_lock(&target_session->lock) != 0) {
@@ -368,10 +377,11 @@ static void notification_fileprint (time_t eventtime, const char* content)
     }
 	if (ntf == NULL) {
 		ERROR("notifications: Failed to allocate element ");
+        free(content);
 		goto unlock_all;
 	}
 	ntf->eventtime = eventtime;
-	ntf->content = strdup(content);
+	ntf->content = content;
 
 	DEBUG("added notif to queue %u (%s)", (unsigned int) ntf->eventtime, "notification");
 
@@ -400,7 +410,7 @@ void* notification_thread(void* arg)
 	}
 
 	DEBUG("notifications: dispatching");
-	ncntf_dispatch_receive(config->session, notification_fileprint);
+	nc_recv_notif_dispatch(config->session, notification_fileprint);
 	DEBUG("notifications: ended thread for libnetconf notifications");
 	if (config->session_id != NULL) {
 		free(config->session_id);
@@ -416,9 +426,8 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 {
 	time_t start = -1;
 	time_t stop = -1;
-	struct nc_filter *filter = NULL;
 	char *stream = NULL;
-	nc_rpc *rpc = NULL;
+	struct nc_rpc *rpc = NULL;
 	pthread_t thread;
 	struct ntf_thread_config *tconfig;
 	struct nc_session *session;
@@ -444,11 +453,6 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 		goto operation_failed;
 	}
 
-	/* check if notifications are allowed on this session */
-	if (nc_session_notif_allowed(session) == 0) {
-		ERROR("notifications: Notification subscription is not allowed on this session.");
-		goto operation_failed;
-	}
 	/* check times */
 	if (start != -1 && stop != -1 && start > stop) {
 		ERROR("notifications: Subscription start time must be lower than the end time.");
@@ -457,8 +461,8 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
 	DEBUG("Prepare to execute subscription.");
 	/* create requests */
-	rpc = nc_rpc_subscribe(stream, filter, (start_time == -1)?NULL:&start, (stop_time == 0)?NULL:&stop);
-	nc_filter_free(filter);
+	rpc = nc_rpc_subscribe(stream, NULL, (start_time == -1) ? NULL : nc_time2datetime(start, NULL),
+                           (stop_time == 0) ? NULL : nc_time2datetime(stop, NULL), NC_PARAMTYPE_CONST);
 	if (rpc == NULL) {
 		ERROR("notifications: creating an rpc request failed.");
 		goto operation_failed;

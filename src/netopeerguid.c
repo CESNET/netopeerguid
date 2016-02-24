@@ -63,8 +63,7 @@
 #include <pthread.h>
 #include <ctype.h>
 
-#include <libnetconf.h>
-#include <libnetconf_ssh.h>
+#include <nc_client.h>
 
 #include "../config.h"
 
@@ -119,7 +118,7 @@ json_object *create_ok_reply(void);
 json_object *create_data_reply(const char *data);
 static char *netconf_getschema(unsigned int session_key, const char *identifier, const char *version,
                                const char *format, json_object **err);
-static void node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *module,
+static void node_add_metadata_recursive(struct lyd_node *data_tree, const struct lys_module *module,
                                         json_object *data_json_parent);
 static void node_metadata_typedef(struct lys_tpdf *tpdf, json_object *parent);
 
@@ -142,7 +141,7 @@ netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNU
 }
 
 char *
-netconf_callback_sshauth_passphrase(const char *UNUSED(username), const char *UNUSED(hostname), const char *UNUSED(priv_key_file))
+netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file))
 {
     char *buf;
     buf = strdup(password);
@@ -218,12 +217,14 @@ netconf_callback_error_process(const char *UNUSED(tag),
 void
 prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
 {
+    int i;
     json_object *json_obj = NULL;
     json_object *js_tmp = NULL;
     char *old_sid = NULL;
     const char *j_old_sid = NULL;
-    const char *cpbltstr;
-    struct nc_cpblts* cpblts = NULL;
+    char str_port[6];
+    const char **cpblts;
+    struct lyd_node *yanglib, *module, *node;
 
     if (s == NULL) {
         ERROR("No session given.");
@@ -244,28 +245,46 @@ prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
     }
     s->hello_message = json_object_new_object();
     if (session != NULL) {
-        if (old_sid != NULL) {
-            /* use previous sid */
-            json_object_object_add(s->hello_message, "sid", json_object_new_string(old_sid));
-            free(old_sid);
-            old_sid = NULL;
-        } else {
+        if (!old_sid) {
             /* we don't have old sid */
-            json_object_object_add(s->hello_message, "sid", json_object_new_string(nc_session_get_id(session)));
+            asprintf(&old_sid, "%u", nc_session_get_id(session));
         }
-        json_object_object_add(s->hello_message, "version", json_object_new_string((nc_session_get_version(session) == 0)?"1.0":"1.1"));
+        json_object_object_add(s->hello_message, "sid", json_object_new_string(old_sid));
+        free(old_sid);
+        old_sid = NULL;
+
+        json_object_object_add(s->hello_message, "version", json_object_new_string((nc_session_get_version(session) ? "1.1":"1.0")));
         json_object_object_add(s->hello_message, "host", json_object_new_string(nc_session_get_host(session)));
-        json_object_object_add(s->hello_message, "port", json_object_new_string(nc_session_get_port(session)));
-        json_object_object_add(s->hello_message, "user", json_object_new_string(nc_session_get_user(session)));
-        cpblts = nc_session_get_cpblts (session);
-        if (cpblts != NULL) {
+        sprintf(str_port, "%u", nc_session_get_port(session));
+        json_object_object_add(s->hello_message, "port", json_object_new_string(str_port));
+        json_object_object_add(s->hello_message, "user", json_object_new_string(nc_session_get_username(session)));
+        cpblts = nc_session_get_cpblts(session);
+        if (cpblts) {
             json_obj = json_object_new_array();
-            nc_cpblts_iter_start (cpblts);
-            while ((cpbltstr = nc_cpblts_iter_next (cpblts)) != NULL) {
-                json_object_array_add(json_obj, json_object_new_string(cpbltstr));
+            for (i = 0; cpblts[i]; ++i) {
+                json_object_array_add(json_obj, json_object_new_string(cpblts[i]));
             }
             json_object_object_add(s->hello_message, "capabilities", json_obj);
         }
+
+        yanglib = ly_ctx_info(nc_session_get_ctx(session));
+        if (yanglib) {
+            json_obj = json_object_new_array();
+            LY_TREE_FOR(yanglib->child, module) {
+                if (!strcmp(module->schema->name, "module")) {
+                    LY_TREE_FOR(module->child, node) {
+                        if (!strcmp(node->schema->name, "name")) {
+                            json_object_array_add(json_obj, json_object_new_string(((struct lyd_node_leaf_list *)node)->value_str));
+                            break;
+                        }
+                    }
+                }
+            }
+            json_object_object_add(s->hello_message, "models", json_obj);
+
+            lyd_free(node);
+        }
+
         DEBUG("%s", json_object_to_json_string(s->hello_message));
     } else {
         ERROR("Session was not given.");
@@ -274,7 +293,6 @@ prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
     }
     DEBUG("Status info from hello message prepared");
     pthread_mutex_unlock(&json_lock);
-
 }
 
 void
@@ -370,7 +388,7 @@ session_user_activity(const char *username)
     struct session_with_mutex *sess;
 
     for (sess = netconf_sessions_list; sess; sess = sess->next) {
-        if (!strcmp(nc_session_get_user(sess->session), username)) {
+        if (!strcmp(nc_session_get_username(sess->session), username)) {
             sess->last_activity = time(NULL);
         }
     }
@@ -997,7 +1015,7 @@ node_metadata_rpc(struct lys_node_rpc *rpc, json_object *parent)
 }
 
 static void
-node_metadata_model(struct lys_module *module, json_object *parent)
+node_metadata_model(const struct lys_module *module, json_object *parent)
 {
     json_object *obj, *array, *item;
     int i;
@@ -1077,270 +1095,22 @@ node_metadata_model(struct lys_module *module, json_object *parent)
  * \param[in] rpc     prepared RPC message
  * \param[in] timeout timeout in miliseconds, -1 for blocking, 0 for non-blocking
  * \param[out] reply  reply from the server
- * \return Value from nc_session_recv_reply() or NC_MSG_UNKNOWN when send_rpc() fails.
+ * \return NC_MSG_WOULDBLOCK or NC_MSG_ERROR.
  * On success, it returns NC_MSG_REPLY.
  */
 NC_MSG_TYPE
-netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc, int timeout, nc_reply **reply)
+netconf_send_recv_timed(struct nc_session *session, struct nc_rpc *rpc, int timeout, int strict, struct nc_reply **reply)
 {
-    const nc_msgid msgid = NULL;
-    NC_MSG_TYPE ret = NC_MSG_UNKNOWN;
-    msgid = nc_session_send_rpc(session, rpc);
-    if (msgid == NULL) {
+    uint64_t msgid;
+    NC_MSG_TYPE ret;
+    ret = nc_send_rpc(session, rpc, timeout, &msgid);
+    if (ret != NC_MSG_RPC) {
         return ret;
     }
-    do {
-        ret = nc_session_recv_reply(session, timeout, reply);
-        if (ret == NC_MSG_HELLO) {
-            ERROR("<hello> received instead reply, it will be lost.");
-            nc_reply_free(*reply);
-        }
-        if (ret == NC_MSG_WOULDBLOCK) {
-            ERROR("Timeout for receiving RPC reply expired.");
-            break;
-        }
-    } while (ret == NC_MSG_HELLO || ret == NC_MSG_NOTIFICATION);
+
+    while ((ret = nc_recv_reply(session, rpc, msgid, timeout, (strict ? LYD_OPT_STRICT : 0), reply)) == NC_MSG_NOTIF);
+
     return ret;
-}
-
-static int
-ctx_download_module(struct session_with_mutex *session, const char *model_name, const char *revision, const char *schema_dir)
-{
-    json_object *err = NULL;
-    char *model_data = NULL, *model_path;
-    size_t length;
-    FILE *file;
-
-    DEBUG("UNLOCK rwlock %s", __func__);
-    if (pthread_rwlock_unlock(&session_lock) != 0) {
-        ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-        return 1;
-    }
-
-    model_data = netconf_getschema(session->session_key, model_name, revision, "yin", &err);
-
-    DEBUG("LOCK rwlock %s", __func__);
-    if (pthread_rwlock_wrlock(&session_lock) != 0) {
-        ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
-        return 1;
-    }
-
-    if (!model_data) {
-        if (err) {
-            json_object_put(err);
-        }
-        ERROR("Failed to get-schema of \"%s\".", model_name);
-        return 1;
-    }
-
-    if (revision) {
-        asprintf(&model_path, "%s/%s@%s.yin", schema_dir, model_name, revision);
-    } else {
-        asprintf(&model_path, "%s/%s.yin", schema_dir, model_name);
-    }
-
-    file = fopen(model_path, "w");
-    if (!file) {
-        ERROR("Failed to open \"%s\" for writing (%s).", model_path, strerror(errno));
-        free(model_data);
-        free(model_path);
-        return 1;
-    }
-    free(model_path);
-
-    length = strlen(model_data);
-    if (fwrite(model_data, 1, length, file) < length) {
-        ERROR("Failed to store the model \"%s\".", model_name);
-        free(model_data);
-        fclose(file);
-        return 1;
-    }
-
-    free(model_data);
-    fclose(file);
-    return 0;
-}
-
-static void
-ctx_enable_features(struct lys_module *module, const char *cpblt)
-{
-    char *ptr, *ptr2, *features = NULL;
-
-    /* parse features */
-    ptr = strstr(cpblt, "features=");
-    if (ptr) {
-        ptr += 9;
-        ptr2 = strchr(ptr, '&');
-        if (!ptr2) {
-            ptr2 = ptr + strlen(ptr);
-        }
-        features = strndup(ptr, ptr2 - ptr);
-    }
-
-    /* enable features */
-    if (features) {
-        /* basically manual strtok_r (to avoid macro) */
-        ptr2 = features;
-        for (ptr = features; *ptr; ++ptr) {
-            if (*ptr == ',') {
-                *ptr = '\0';
-                /* remember last feature */
-                ptr2 = ptr + 1;
-            }
-        }
-
-        ptr = features;
-        lys_features_enable(module, ptr);
-        while (ptr != ptr2) {
-            ptr += strlen(ptr) + 1;
-            lys_features_enable(module, ptr);
-        }
-
-        free(features);
-    }
-}
-
-static void
-ctx_enable_capabs(struct lys_module *ietfnc, json_object *cpb_array)
-{
-    json_object *item;
-    int i;
-    const char *capab;
-
-    /* set supported capabilities from ietf-netconf */
-    for (i = 0; i < json_object_array_length(cpb_array); ++i) {
-        item = json_object_array_get_idx(cpb_array, i);
-        capab = json_object_get_string(item);
-
-        if (!strncmp(capab, "urn:ietf:params:netconf:capability:", 35)) {
-            if (!strncmp(capab, "writable-running", 16)) {
-                lys_features_enable(ietfnc, "writable-running");
-            } else if (!strncmp(capab, "candidate", 9)) {
-                lys_features_enable(ietfnc, "candidate");
-            } else if (!strcmp(capab, "confirmed-commit:1.1")) {
-                lys_features_enable(ietfnc, "confirmed-commit");
-            } else if (!strncmp(capab, "rollback-on-error", 17)) {
-                lys_features_enable(ietfnc, "rollback-on-error");
-            } else if (!strcmp(capab, "validate:1.1")) {
-                lys_features_enable(ietfnc, "validate");
-            } else if (!strncmp(capab, "startup", 7)) {
-                lys_features_enable(ietfnc, "startup");
-            } else if (!strncmp(capab, "url", 3)) {
-                lys_features_enable(ietfnc, "url");
-            } else if (!strncmp(capab, "xpath", 5)) {
-                lys_features_enable(ietfnc, "xpath");
-            }
-        }
-    }
-}
-
-static int
-prepare_context(struct session_with_mutex *session)
-{
-    struct lys_module *module;
-    json_object *array, *item;
-    char *ptr, *ptr2;
-    char *model_name = NULL, *revision = NULL;
-    const char *capab;
-    int i, get_schema_support;
-
-    if (json_object_object_get_ex(session->hello_message, "capabilities", &array) == FALSE) {
-        return 1;
-    }
-
-    get_schema_support = 0;
-    for (i = 0; i < json_object_array_length(array); ++i) {
-        item = json_object_array_get_idx(array, i);
-        capab = json_object_get_string(item);
-
-        if (!strncmp(capab, "urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring", 51)) {
-            get_schema_support = 1;
-            break;
-        }
-    }
-
-    if (get_schema_support) {
-        errno = 0;
-        if (eaccess(SCHEMA_DIR, W_OK)) {
-            if (errno == ENOENT) {
-                if (mkdir(SCHEMA_DIR, 00755)) {
-                    ERROR("Failed to create temp model dir \"%s\" (%s).", SCHEMA_DIR, strerror(errno));
-                    return 1;
-                }
-            } else {
-                ERROR("Unable to write to temp model dir \"%s\" (%s).", SCHEMA_DIR, strerror(errno));
-                return 1;
-            }
-        }
-
-        session->ctx = ly_ctx_new(SCHEMA_DIR);
-    } else {
-        /* TODO try to load models from a local directory */
-        session->ctx = ly_ctx_new(NULL);
-    }
-
-loop:
-    /* download all the models first or load them directly */
-    for (i = 0; i < json_object_array_length(array); ++i) {
-        item = json_object_array_get_idx(array, i);
-        capab = json_object_get_string(item);
-        if (!strncmp(capab, "urn:ietf:params:netconf:capability", 34)
-                || !strncmp(capab, "urn:ietf:params:netconf:base", 28)) {
-            continue;
-        }
-
-        /* get module */
-        ptr = strstr(capab, "module=");
-        if (!ptr) {
-        ERROR("Unknown capability \"%s\" could not be parsed.", capab);
-            continue;
-        }
-        ptr += 7;
-        ptr2 = strchr(ptr, '&');
-        if (!ptr2) {
-            ptr2 = ptr + strlen(ptr);
-        }
-        model_name = strndup(ptr, ptr2 - ptr);
-
-        /* get revision */
-        ptr = strstr(capab, "revision=");
-        if (ptr) {
-            ptr += 9;
-            ptr2 = strchr(ptr, '&');
-            if (!ptr2) {
-                ptr2 = ptr + strlen(ptr);
-            }
-            revision = strndup(ptr, ptr2 - ptr);
-        }
-
-        if (get_schema_support) {
-            ctx_download_module(session, model_name, revision, SCHEMA_DIR);
-        } else {
-            module = ly_ctx_get_module(session->ctx, model_name, revision);
-            if (!module) {
-                module = ly_ctx_load_module(session->ctx, model_name, revision);
-                if (module) {
-                    if (!strcmp(module->name, "ietf-netconf")) {
-                        ctx_enable_capabs(module, array);
-                    } else {
-                        ctx_enable_features(module, capab);
-                    }
-                }
-            }
-        }
-
-        free(model_name);
-        free(revision);
-        revision = NULL;
-    }
-
-    if (get_schema_support) {
-        /* we have downloaded all the models, load them now */
-        get_schema_support = 0;
-        goto loop;
-    }
-
-    return 0;
 }
 
 /**
@@ -1349,7 +1119,7 @@ loop:
  * \warning Session_key hash is not bound with caller identification. This could be potential security risk.
  */
 static unsigned int
-netconf_connect(const char *host, const char *port, const char *user, const char *pass, const char *privkey, struct nc_cpblts *cpblts)
+netconf_connect(const char *host, const char *port, const char *user, const char *pass, const char *privkey)
 {
     struct nc_session* session = NULL;
     struct session_with_mutex *locked_session, *last_session;
@@ -1358,13 +1128,14 @@ netconf_connect(const char *host, const char *port, const char *user, const char
     /* connect to the requested NETCONF server */
     password = (char*)pass;
     if (privkey) {
-        nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, 3);
+        nc_client_ssh_set_auth_pref(NC_SSH_AUTH_PUBLICKEY, 3);
         asprintf(&pubkey, "%s.pub", privkey);
-        nc_set_keypair_path(privkey, pubkey);
+        nc_client_ssh_add_keypair(pubkey, privkey);
         free(pubkey);
     }
+    nc_client_ssh_set_username(user);
     DEBUG("prepare to connect %s@%s:%s", user, host, port);
-    session = nc_session_connect(host, (unsigned short) atoi (port), user, cpblts);
+    session = nc_connect_ssh(host, (unsigned short)atoi(port), NULL);
     DEBUG("nc_session_connect done");
 
     /* if connected successful, add session to the list */
@@ -1399,22 +1170,12 @@ netconf_connect(const char *host, const char *port, const char *user, const char
             last_session->next = locked_session;
             locked_session->prev = last_session;
         }
-        session_user_activity(nc_session_get_user(locked_session->session));
+        session_user_activity(nc_session_get_username(locked_session->session));
 
         /* no need to lock session, noone can read it while we have wrlock */
 
         /* store information about session from hello message for future usage */
         prepare_status_message(locked_session, session);
-
-        /* create context from the hello message cpabilities */
-        if (prepare_context(locked_session)) {
-            nc_session_free(session);
-            free(locked_session);
-            DEBUG("UNLOCK wrlock %s", __func__);
-            pthread_rwlock_unlock(&session_lock);
-            ERROR("Failed to prepare context");
-            return 0;
-        }
 
         DEBUG("NETCONF session established");
         locked_session->session_key = session_key_generator;
@@ -1475,7 +1236,6 @@ close_and_free_session(struct session_with_mutex *locked_session)
         locked_session->hello_message = NULL;
     }
     locked_session->session = NULL;
-    ly_ctx_destroy(locked_session->ctx);
     free(locked_session);
     locked_session = NULL;
     DEBUG("NETCONF session closed, everything cleared.");
@@ -1544,15 +1304,14 @@ netconf_close(unsigned int session_key, json_object **reply)
  * \return NULL on success
  */
 json_object *
-netconf_test_reply(struct nc_session *session, unsigned int session_key, NC_MSG_TYPE msgt, nc_reply *reply, char **data)
+netconf_test_reply(struct nc_session *session, unsigned int session_key, NC_MSG_TYPE msgt, struct nc_reply *reply, struct lyd_node **data)
 {
-    NC_REPLY_TYPE replyt;
     json_object *err = NULL;
 
     /* process the result of the operation */
     switch (msgt) {
-        case NC_MSG_UNKNOWN:
-            if (nc_session_get_status(session) != NC_SESSION_STATUS_WORKING) {
+        case NC_MSG_ERROR:
+            if (nc_session_get_status(session) != NC_STATUS_RUNNING) {
                 ERROR("mod_netconf: receiving rpc-reply failed");
                 if (session_key) {
                     netconf_close(session_key, &err);
@@ -1570,30 +1329,31 @@ netconf_test_reply(struct nc_session *session, unsigned int session_key, NC_MSG_
             }
             return NULL;
         case NC_MSG_REPLY:
-            switch (replyt = nc_reply_get_type(reply)) {
-                case NC_REPLY_OK:
+            switch (reply->type) {
+                case NC_RPL_OK:
                     if ((data != NULL) && (*data != NULL)) {
                         free(*data);
                         (*data) = NULL;
                     }
                     return create_ok_reply();
-                case NC_REPLY_DATA:
-                    if (((*data) = nc_reply_get_data(reply)) == NULL) {
+                case NC_RPL_DATA:
+                    if (((*data) = ((struct nc_reply_data *)reply)->data) == NULL) {
                         ERROR("mod_netconf: no data from reply");
                         return create_error_reply("Internal: No data from reply received.");
                     } else {
+                        ((struct nc_reply_data *)reply)->data = NULL;
                         return NULL;
                     }
                     break;
-                case NC_REPLY_ERROR:
-                    ERROR("mod_netconf: unexpected rpc-reply (%d)", replyt);
+                case NC_RPL_ERROR:
+                    ERROR("mod_netconf: unexpected rpc-reply (%d)", reply->type);
                     if (data != NULL) {
                         free(*data);
                         (*data) = NULL;
                     }
-                    return create_error_reply(nc_reply_get_errormsg(reply));
+                    return create_error_reply(((struct nc_reply_error *)reply)->err[0].message);
                 default:
-                    ERROR("mod_netconf: unexpected rpc-reply (%d)", replyt);
+                    ERROR("mod_netconf: unexpected rpc-reply (%d)", reply->type);
                     if (data != NULL) {
                         free(*data);
                         (*data) = NULL;
@@ -1612,9 +1372,9 @@ netconf_test_reply(struct nc_session *session, unsigned int session_key, NC_MSG_
 }
 
 json_object *
-netconf_unlocked_op(struct nc_session *session, nc_rpc *rpc)
+netconf_unlocked_op(struct nc_session *session, struct nc_rpc *rpc)
 {
-    nc_reply* reply = NULL;
+    struct nc_reply* reply = NULL;
     NC_MSG_TYPE msgt;
 
     /* check requests */
@@ -1625,7 +1385,7 @@ netconf_unlocked_op(struct nc_session *session, nc_rpc *rpc)
 
     if (session != NULL) {
         /* send the request and get the reply */
-        msgt = netconf_send_recv_timed(session, rpc, 50000, &reply);
+        msgt = netconf_send_recv_timed(session, rpc, 50000, 0, &reply);
         /* process the result of the operation */
         return netconf_test_reply(session, 0, msgt, reply, NULL);
     } else {
@@ -1643,12 +1403,12 @@ netconf_unlocked_op(struct nc_session *session, nc_rpc *rpc)
  * \return NULL on success, json object with error otherwise
  */
 static json_object *
-netconf_op(unsigned int session_key, nc_rpc *rpc, char **received_data)
+netconf_op(unsigned int session_key, struct nc_rpc *rpc, int strict, struct lyd_node **received_data)
 {
     struct session_with_mutex * locked_session;
-    nc_reply* reply = NULL;
+    struct nc_reply* reply = NULL;
     json_object *res = NULL;
-    char *data = NULL;
+    struct lyd_node *data = NULL;
     NC_MSG_TYPE msgt;
 
     /* check requests */
@@ -1665,10 +1425,10 @@ netconf_op(unsigned int session_key, nc_rpc *rpc, char **received_data)
         goto finished;
     }
 
-    session_user_activity(nc_session_get_user(locked_session->session));
+    session_user_activity(nc_session_get_username(locked_session->session));
 
     /* send the request and get the reply */
-    msgt = netconf_send_recv_timed(locked_session->session, rpc, 2000000, &reply);
+    msgt = netconf_send_recv_timed(locked_session->session, rpc, 2000000, strict, &reply);
 
     session_unlock(locked_session);
 
@@ -1690,39 +1450,25 @@ finished:
 static char *
 netconf_getconfig(unsigned int session_key, NC_DATASTORE source, const char *filter, int strict, json_object **err)
 {
-    nc_rpc* rpc;
-    struct nc_filter *f = NULL;
+    struct nc_rpc* rpc;
     struct session_with_mutex *locked_session;
-    char* data = NULL, *data_xml;
     json_object *res = NULL, *data_cjson;
     enum json_tokener_error tok_err;
-    struct lyd_node *node, *sibling, *next;
+    char *data_json;
+    struct lyd_node *data, *sibling, *next;
 
-    /* create filter if set */
-    if (filter != NULL) {
-        f = nc_filter_new(NC_FILTER_SUBTREE, filter);
-    }
-
-    /* create requests */
-    rpc = nc_rpc_getconfig(source, f);
-    nc_filter_free(f);
+    /* tell server to show all elements even if they have default values */
+#ifdef HAVE_WITHDEFAULTS_TAGGED
+    rpc = nc_rpc_getconfig(source, filter, NC_WD_MODE_ALL_TAG, NC_PARAMTYPE_CONST);
+#else
+    rpc = nc_rpc_getconfig(source, filter, 0, NC_PARAMTYPE_CONST);
+#endif
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return (NULL);
     }
 
-    /* tell server to show all elements even if they have default values */
-#ifdef HAVE_WITHDEFAULTS_TAGGED
-    if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED))
-#else
-    if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET))
-    //if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL))
-#endif
-    {
-        ERROR("mod_netconf: setting withdefaults failed");
-    }
-
-    res = netconf_op(session_key, rpc, &data);
+    res = netconf_op(session_key, rpc, strict, &data);
     nc_rpc_free(rpc);
     if (res != NULL) {
         (*err) = res;
@@ -1736,109 +1482,98 @@ netconf_getconfig(unsigned int session_key, NC_DATASTORE source, const char *fil
              locked_session = locked_session->next);
         /* won't fail */
 
-        asprintf(&data_xml, "<get-config>%s</get-config>", data);
-        node = lyd_parse(locked_session->ctx, data_xml, LYD_XML, LYD_OPT_GETCONFIG | (strict ? LYD_OPT_STRICT : 0));
-        free(data_xml);
-        free(data);
-        if (!node) {
-            ERROR("Parsing <get-config> data failed.");
-            return NULL;
-        }
-
-        /* replace XML data with JSON data */
-        if (lyd_print_mem(&data, node, LYD_JSON)) {
+        /* print data into JSON */
+        if (lyd_print_mem(&data_json, data, LYD_JSON, LYP_WITHSIBLINGS)) {
             ERROR("Printing JSON <get-config> data failed.");
-            LY_TREE_FOR(node, sibling) {
-                lyd_free(sibling);
-            }
+            lyd_free_withsiblings(data);
             return NULL;
         }
 
         /* parse JSON data into cjson */
         pthread_mutex_lock(&json_lock);
-        data_cjson = json_tokener_parse_verbose(data, &tok_err);
+        data_cjson = json_tokener_parse_verbose(data_json, &tok_err);
         if (!data_cjson) {
             ERROR("Parsing JSON config failed (%s).", json_tokener_error_desc(tok_err));
             pthread_mutex_unlock(&json_lock);
-            LY_TREE_FOR(node, sibling) {
-                lyd_free(sibling);
-            }
-            free(data);
+            lyd_free_withsiblings(data);
+            free(data_json);
             return NULL;
         }
-        free(data);
+        free(data_json);
 
         /* go simultaneously through both trees and add metadata */
-        LY_TREE_FOR_SAFE(node, next, sibling) {
+        LY_TREE_FOR_SAFE(data, next, sibling) {
             node_add_metadata_recursive(sibling, NULL, data_cjson);
             lyd_free(sibling);
         }
 
-        data = strdup(json_object_to_json_string_ext(data_cjson, 0));
+        data_json = strdup(json_object_to_json_string_ext(data_cjson, 0));
         json_object_put(data_cjson);
         pthread_mutex_unlock(&json_lock);
     }
 
-    return (data);
+    return (data_json);
 }
 
 static char *
 netconf_getschema(unsigned int session_key, const char *identifier, const char *version, const char *format, json_object **err)
 {
-    nc_rpc* rpc;
-    char* data = NULL;
+    struct nc_rpc *rpc;
+    struct lyd_node *data = NULL;
     json_object *res = NULL;
+    char *model_data = NULL, *anyxml, *ptr, *ptr2;
 
     /* create requests */
-    rpc = nc_rpc_getschema(identifier, version, format);
+    rpc = nc_rpc_getschema(identifier, version, format, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return (NULL);
     }
 
-    res = netconf_op(session_key, rpc, &data);
-    nc_rpc_free (rpc);
+    res = netconf_op(session_key, rpc, 0, &data);
+    nc_rpc_free(rpc);
     if (res != NULL) {
         (*err) = res;
     } else {
         (*err) = NULL;
+
+        if (data) {
+            lyxml_print_mem(&anyxml, ((struct lyd_node_anyxml *)data)->value, 0);
+
+            /* it's with the data root node, remove it */
+            if (anyxml) {
+                ptr = strchr(anyxml, '>');
+                ++ptr;
+
+                ptr2 = strrchr(anyxml, '<');
+
+                model_data = strndup(ptr, strlen(ptr) - strlen(ptr2));
+                free(anyxml);
+            }
+        }
     }
 
-    return (data);
+    return (model_data);
 }
 
 static char *
 netconf_get(unsigned int session_key, const char* filter, int strict, json_object **err)
 {
-    nc_rpc* rpc;
-    struct nc_filter *f = NULL;
-    char* data = NULL, *data_xml;
+    struct nc_rpc* rpc;
+    char* data_json = NULL;
     json_object *res = NULL, *data_cjson;
     enum json_tokener_error tok_err;
     struct session_with_mutex *locked_session;
-    struct lyd_node *node, *sibling, *next;
-
-    /* create filter if set */
-    if (filter != NULL) {
-        f = nc_filter_new(NC_FILTER_SUBTREE, filter);
-    }
+    struct lyd_node *data, *sibling, *next;
 
     /* create requests */
-    rpc = nc_rpc_get(f);
-    nc_filter_free(f);
+    rpc = nc_rpc_get(filter, 0, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return (NULL);
     }
 
-    /* tell server to show all elements even if they have default values */
-    if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_NOTSET)) {
-    //if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL)) {
-    //if (nc_rpc_capability_attr(rpc, NC_CAP_ATTR_WITHDEFAULTS_MODE, NCWD_MODE_ALL_TAGGED)) {
-        ERROR("mod_netconf: setting withdefaults failed");
-    }
-
-    res = netconf_op(session_key, rpc, &data);
+    res = netconf_op(session_key, rpc, strict, &data);
     nc_rpc_free(rpc);
     if (res != NULL) {
         (*err) = res;
@@ -1852,111 +1587,74 @@ netconf_get(unsigned int session_key, const char* filter, int strict, json_objec
              locked_session = locked_session->next);
         /* won't fail */
 
-        asprintf(&data_xml, "<get>%s</get>", data);
-        node = lyd_parse(locked_session->ctx, data_xml, LYD_XML, LYD_OPT_GET | (strict ? LYD_OPT_STRICT : 0));
-        free(data_xml);
-        free(data);
-        if (!node) {
-            ERROR("Parsing <get> data failed.");
-            return NULL;
-        }
-
-        /* replace XML data with JSON data */
-        if (lyd_print_mem(&data, node, LYD_JSON)) {
+        /* print JSON data */
+        if (lyd_print_mem(&data_json, data, LYD_JSON, LYP_WITHSIBLINGS)) {
             ERROR("Printing JSON <get> data failed.");
-            LY_TREE_FOR(node, sibling) {
-                lyd_free(sibling);
-            }
+            lyd_free_withsiblings(data);
             return NULL;
         }
 
         /* parse JSON data into cjson */
         pthread_mutex_lock(&json_lock);
-        data_cjson = json_tokener_parse_verbose(data, &tok_err);
+        data_cjson = json_tokener_parse_verbose(data_json, &tok_err);
         if (!data_cjson) {
             ERROR("Parsing JSON config failed (%s).", json_tokener_error_desc(tok_err));
             pthread_mutex_unlock(&json_lock);
-            LY_TREE_FOR(node, sibling) {
-                lyd_free(sibling);
-            }
-            free(data);
+            lyd_free_withsiblings(data);
+            free(data_json);
             return NULL;
         }
-        free(data);
+        free(data_json);
 
         /* go simultaneously through both trees and add metadata */
-        LY_TREE_FOR_SAFE(node, next, sibling) {
+        LY_TREE_FOR_SAFE(data, next, sibling) {
             node_add_metadata_recursive(sibling, NULL, data_cjson);
             lyd_free(sibling);
         }
 
-        data = strdup(json_object_to_json_string_ext(data_cjson, 0));
+        data_json = strdup(json_object_to_json_string_ext(data_cjson, 0));
         json_object_put(data_cjson);
         pthread_mutex_unlock(&json_lock);
     }
 
-    return data;
+    return data_json;
 }
 
 static json_object *
 netconf_copyconfig(unsigned int session_key, NC_DATASTORE source, NC_DATASTORE target, const char *config,
                    const char *uri_src, const char *uri_trg)
 {
-    nc_rpc* rpc;
+    struct nc_rpc* rpc;
     json_object *res = NULL;
 
     /* create requests */
-    if (source == NC_DATASTORE_CONFIG) {
-        if (target == NC_DATASTORE_URL) {
-            /* config, url */
-            rpc = nc_rpc_copyconfig(source, target, config, uri_trg);
-        } else {
-            /* config, datastore */
-            rpc = nc_rpc_copyconfig(source, target, config);
-        }
-    } else if (source == NC_DATASTORE_URL) {
-        if (target == NC_DATASTORE_URL) {
-            /* url, url */
-            rpc = nc_rpc_copyconfig(source, target, uri_src, uri_trg);
-        } else {
-            /* url, datastore */
-            rpc = nc_rpc_copyconfig(source, target, uri_src);
-        }
-    } else {
-        if (target == NC_DATASTORE_URL) {
-            /* datastore, url */
-            rpc = nc_rpc_copyconfig(source, target, uri_trg);
-        } else {
-            /* datastore, datastore */
-            rpc = nc_rpc_copyconfig(source, target);
-        }
-    }
+    rpc = nc_rpc_copy(target, uri_trg, source, (config ? config : uri_src), 0, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
-    res = netconf_op(session_key, rpc, NULL);
+    res = netconf_op(session_key, rpc, 0, NULL);
     nc_rpc_free(rpc);
 
     return res;
 }
 
 static json_object *
-netconf_editconfig(unsigned int session_key, NC_DATASTORE source, NC_DATASTORE target, NC_EDIT_DEFOP_TYPE defop,
-                   NC_EDIT_ERROPT_TYPE erropt, NC_EDIT_TESTOPT_TYPE testopt, const char *config_or_url)
+netconf_editconfig(unsigned int session_key, NC_DATASTORE target, NC_RPC_EDIT_DFLTOP defop,
+                   NC_RPC_EDIT_ERROPT erropt, NC_RPC_EDIT_TESTOPT testopt, const char *config_or_url)
 {
-    nc_rpc* rpc;
+    struct nc_rpc* rpc;
     json_object *res = NULL;
 
     /* create requests */
-    rpc = nc_rpc_editconfig(target, source, defop, erropt, testopt, config_or_url);
+    rpc = nc_rpc_edit(target, defop, testopt, erropt, config_or_url, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
-    res = netconf_op(session_key, rpc, NULL);
+    res = netconf_op(session_key, rpc, 0, NULL);
     nc_rpc_free (rpc);
 
     return res;
@@ -1965,25 +1663,25 @@ netconf_editconfig(unsigned int session_key, NC_DATASTORE source, NC_DATASTORE t
 static json_object *
 netconf_killsession(unsigned int session_key, const char *sid)
 {
-    nc_rpc *rpc;
+    struct nc_rpc *rpc;
     json_object *res = NULL;
 
     /* create requests */
-    rpc = nc_rpc_killsession(sid);
+    rpc = nc_rpc_kill(atoi(sid));
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
-    res = netconf_op(session_key, rpc, NULL);
+    res = netconf_op(session_key, rpc, 0, NULL);
     nc_rpc_free(rpc);
     return res;
 }
 
 static json_object *
-netconf_onlytargetop(unsigned int session_key, NC_DATASTORE target, nc_rpc *(*op_func)(NC_DATASTORE))
+netconf_onlytargetop(unsigned int session_key, NC_DATASTORE target, struct nc_rpc *(*op_func)(NC_DATASTORE))
 {
-    nc_rpc* rpc;
+    struct nc_rpc* rpc;
     json_object *res = NULL;
 
     /* create requests */
@@ -1993,7 +1691,7 @@ netconf_onlytargetop(unsigned int session_key, NC_DATASTORE target, nc_rpc *(*op
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
-    res = netconf_op(session_key, rpc, NULL);
+    res = netconf_op(session_key, rpc, 0, NULL);
     nc_rpc_free (rpc);
     return res;
 }
@@ -2001,19 +1699,15 @@ netconf_onlytargetop(unsigned int session_key, NC_DATASTORE target, nc_rpc *(*op
 static json_object *
 netconf_deleteconfig(unsigned int session_key, NC_DATASTORE target, const char *url)
 {
-    nc_rpc *rpc = NULL;
+    struct nc_rpc *rpc = NULL;
     json_object *res = NULL;
-    if (target != NC_DATASTORE_URL) {
-        rpc = nc_rpc_deleteconfig(target);
-    } else {
-        rpc = nc_rpc_deleteconfig(target, url);
-    }
+    rpc = nc_rpc_delete(target, url, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
-    res = netconf_op(session_key, rpc, NULL);
+    res = netconf_op(session_key, rpc, 0, NULL);
     nc_rpc_free (rpc);
     return res;
 }
@@ -2031,28 +1725,28 @@ netconf_unlock(unsigned int session_key, NC_DATASTORE target)
 }
 
 static json_object *
-netconf_generic(unsigned int session_key, const char *content, char **data)
+netconf_generic(unsigned int session_key, const char *xml_content, struct lyd_node **data)
 {
-    nc_rpc* rpc = NULL;
+    struct nc_rpc* rpc = NULL;
     json_object *res = NULL;
 
     assert(!data || !*data);
 
     /* create requests */
-    rpc = nc_rpc_generic(content);
+    rpc = nc_rpc_generic_xml(xml_content, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
     }
 
     /* get session where send the RPC */
-    res = netconf_op(session_key, rpc, data);
-    nc_rpc_free (rpc);
+    res = netconf_op(session_key, rpc, 0, data);
+    nc_rpc_free(rpc);
     return res;
 }
 
 static int
-node_add_metadata(struct lys_node *node, struct lys_module *module, json_object *parent)
+node_add_metadata(const struct lys_node *node, const struct lys_module *module, json_object *parent)
 {
     struct lys_module *cur_module;
     json_object *meta_obj;
@@ -2124,7 +1818,7 @@ node_add_metadata(struct lys_node *node, struct lys_module *module, json_object 
 }
 
 static void
-node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *module, json_object *data_json_parent)
+node_add_metadata_recursive(struct lyd_node *data_tree, const struct lys_module *module, json_object *data_json_parent)
 {
     struct lys_module *cur_module;
     struct lys_node *list_schema;
@@ -2203,7 +1897,7 @@ node_add_metadata_recursive(struct lyd_node *data_tree, struct lys_module *modul
 }
 
 static void
-node_add_model_metadata(struct lys_module *module, json_object *parent)
+node_add_model_metadata(const struct lys_module *module, json_object *parent)
 {
     json_object *obj;
     char *str;
@@ -2216,9 +1910,9 @@ node_add_model_metadata(struct lys_module *module, json_object *parent)
 }
 
 static void
-node_add_children_with_metadata_recursive(struct lys_node *node, struct lys_module *module, json_object *parent)
+node_add_children_with_metadata_recursive(const struct lys_node *node, const struct lys_module *module, json_object *parent)
 {
-    struct lys_module *cur_module;
+    const struct lys_module *cur_module;
     struct lys_node *child;
     json_object *node_json;
     char *json_name;
@@ -2269,8 +1963,8 @@ children:
 static json_object *
 libyang_query(unsigned int session_key, const char *filter, int load_children)
 {
-    struct lys_node *node;
-    struct lys_module *module = NULL;
+    const struct lys_node *node;
+    const struct lys_module *module = NULL;
     struct session_with_mutex *locked_session;
     json_object *ret = NULL, *data;
 
@@ -2280,16 +1974,16 @@ libyang_query(unsigned int session_key, const char *filter, int load_children)
         goto finish;
     }
 
-    session_user_activity(nc_session_get_user(locked_session->session));
+    session_user_activity(nc_session_get_username(locked_session->session));
 
     if (filter[0] == '/') {
-        node = ly_ctx_get_node(locked_session->ctx, filter);
+        node = ly_ctx_get_node(nc_session_get_ctx(locked_session->session), filter);
         if (!node) {
             ret = create_error_reply("Failed to resolve XPath filter node.");
             goto finish;
         }
     } else {
-        module = ly_ctx_get_module(locked_session->ctx, filter, NULL);
+        module = ly_ctx_get_module(nc_session_get_ctx(locked_session->session), filter, NULL);
         if (!module) {
             ret = create_error_reply("Failed to find model.");
             goto finish;
@@ -2337,9 +2031,9 @@ libyang_merge(unsigned int session_key, const char *config)
         goto finish;
     }
 
-    session_user_activity(nc_session_get_user(locked_session->session));
+    session_user_activity(nc_session_get_username(locked_session->session));
 
-    data_tree = lyd_parse(locked_session->ctx, config, LYD_JSON, LYD_OPT_STRICT);
+    data_tree = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_STRICT);
     if (!data_tree) {
         ERROR("Creating data tree failed.");
         ret = create_error_reply("Failed to create data tree from JSON config.");
@@ -2504,19 +2198,19 @@ parse_datastore(const char *ds)
     return -1;
 }
 
-NC_EDIT_TESTOPT_TYPE
+NC_RPC_EDIT_TESTOPT
 parse_testopt(const char *t)
 {
     if (strcmp(t, "notset") == 0) {
-        return NC_EDIT_TESTOPT_NOTSET;
+        return NC_RPC_EDIT_TESTOPT_UNKNOWN;
     } else if (strcmp(t, "testset") == 0) {
-        return NC_EDIT_TESTOPT_TESTSET;
+        return NC_RPC_EDIT_TESTOPT_TESTSET;
     } else if (strcmp(t, "set") == 0) {
-        return NC_EDIT_TESTOPT_SET;
+        return NC_RPC_EDIT_TESTOPT_SET;
     } else if (strcmp(t, "test") == 0) {
-        return NC_EDIT_TESTOPT_TEST;
+        return NC_RPC_EDIT_TESTOPT_TEST;
     }
-    return NC_EDIT_TESTOPT_ERROR;
+    return NC_RPC_EDIT_TESTOPT_UNKNOWN;
 }
 
 json_object *
@@ -2604,7 +2298,6 @@ handle_op_connect(json_object *request)
     char *privkey = NULL;
     json_object *reply = NULL;
     unsigned int session_key = 0;
-    struct nc_cpblts* cpblts = NULL;
 
     DEBUG("Request: connect");
     pthread_mutex_lock(&json_lock);
@@ -2626,11 +2319,8 @@ handle_op_connect(json_object *request)
         ERROR("Cannot connect - insufficient input.");
         session_key = 0;
     } else {
-        session_key = netconf_connect(host, port, user, pass, privkey, cpblts);
+        session_key = netconf_connect(host, port, user, pass, privkey);
         DEBUG("Session key: %u", session_key);
-    }
-    if (cpblts != NULL) {
-        nc_cpblts_free(cpblts);
     }
 
     GETSPEC_ERR_REPLY
@@ -2757,25 +2447,24 @@ finalize:
 json_object *
 handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
 {
-    NC_DATASTORE ds_type_s = -1;
     NC_DATASTORE ds_type_t = -1;
-    NC_EDIT_DEFOP_TYPE defop_type = NC_EDIT_DEFOP_NOTSET;
-    NC_EDIT_ERROPT_TYPE erropt_type = 0;
-    NC_EDIT_TESTOPT_TYPE testopt_type = NC_EDIT_TESTOPT_TESTSET;
+    NC_RPC_EDIT_DFLTOP defop_type = 0;
+    NC_RPC_EDIT_ERROPT erropt_type = 0;
+    NC_RPC_EDIT_TESTOPT testopt_type = NC_RPC_EDIT_TESTOPT_TESTSET;
     char *defop = NULL;
     char *erropt = NULL;
     char *config = NULL;
-    char *source = NULL;
     char *target = NULL;
     char *testopt = NULL;
     char *urisource = NULL;
     json_object *reply = NULL, *configs, *obj;
+    struct lyd_node *content;
+    struct session_with_mutex *locked_session;
 
     DEBUG("Request: edit-config (session %u)", session_key);
 
     pthread_mutex_lock(&json_lock);
     /* get parameters */
-    target = get_param_string(request, "target");
     if (json_object_object_get_ex(request, "configs", &configs) == FALSE) {
         pthread_mutex_unlock(&json_lock);
         reply = create_error_reply("Missing configs parameter.");
@@ -2784,7 +2473,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     obj = json_object_array_get_idx(configs, idx);
     config = strdup(json_object_get_string(obj));
 
-    source = get_param_string(request, "source");
+    target = get_param_string(request, "target");
     defop = get_param_string(request, "default-operation");
     erropt = get_param_string(request, "error-option");
     urisource = get_param_string(request, "uri-source");
@@ -2794,35 +2483,29 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     if (target != NULL) {
         ds_type_t = parse_datastore(target);
     }
-    if (source != NULL) {
-        ds_type_s = parse_datastore(source);
-    } else {
-        /* source is optional, default value is config */
-        ds_type_s = NC_DATASTORE_CONFIG;
-    }
 
     if (defop != NULL) {
         if (strcmp(defop, "merge") == 0) {
-            defop_type = NC_EDIT_DEFOP_MERGE;
+            defop_type = NC_RPC_EDIT_DFLTOP_MERGE;
         } else if (strcmp(defop, "replace") == 0) {
-            defop_type = NC_EDIT_DEFOP_REPLACE;
+            defop_type = NC_RPC_EDIT_DFLTOP_REPLACE;
         } else if (strcmp(defop, "none") == 0) {
-            defop_type = NC_EDIT_DEFOP_NONE;
+            defop_type = NC_RPC_EDIT_DFLTOP_NONE;
         } else {
             reply = create_error_reply("Invalid default-operation parameter.");
             goto finalize;
         }
     } else {
-        defop_type = NC_EDIT_DEFOP_NOTSET;
+        defop_type = NC_RPC_EDIT_DFLTOP_UNKNOWN;
     }
 
     if (erropt != NULL) {
         if (strcmp(erropt, "continue-on-error") == 0) {
-            erropt_type = NC_EDIT_ERROPT_CONT;
+            erropt_type = NC_RPC_EDIT_ERROPT_CONTINUE;
         } else if (strcmp(erropt, "stop-on-error") == 0) {
-            erropt_type = NC_EDIT_ERROPT_STOP;
+            erropt_type = NC_RPC_EDIT_ERROPT_STOP;
         } else if (strcmp(erropt, "rollback-on-error") == 0) {
-            erropt_type = NC_EDIT_ERROPT_ROLLBACK;
+            erropt_type = NC_RPC_EDIT_ERROPT_ROLLBACK;
         } else {
             reply = create_error_reply("Invalid error-option parameter.");
             goto finalize;
@@ -2831,30 +2514,35 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
         erropt_type = 0;
     }
 
-    if ((int)ds_type_t == -1) {
-        reply = create_error_reply("Invalid target repository type requested.");
+    if ((config && urisource) || (!config && !urisource)) {
+        reply = create_error_reply("Invalid config and uri-source data parameters.");
         goto finalize;
     }
-    if (ds_type_s == NC_DATASTORE_CONFIG) {
-        if (config == NULL) {
-            reply = create_error_reply("Invalid config data parameter.");
+
+    if (config) {
+        locked_session = session_get_locked(session_key, NULL);
+        if (!locked_session) {
+            ERROR("Unknown session or locking failed.");
             goto finalize;
         }
-    } else if (ds_type_s == NC_DATASTORE_URL){
-        if (urisource == NULL) {
-            reply = create_error_reply("Invalid uri-source parameter.");
-            goto finalize;
-        }
+
+        content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_EDIT);
+        session_unlock(locked_session);
+
+        free(config);
+        lyd_print_mem(&config, content, LYD_XML, LYP_WITHSIBLINGS);
+        lyd_free_withsiblings(content);
+    } else {
         config = urisource;
     }
 
     if (testopt != NULL) {
         testopt_type = parse_testopt(testopt);
     } else {
-        testopt_type = NC_EDIT_TESTOPT_TESTSET;
+        testopt_type = NC_RPC_EDIT_TESTOPT_TESTSET;
     }
 
-    reply = netconf_editconfig(session_key, ds_type_s, ds_type_t, defop_type, erropt_type, testopt_type, config);
+    reply = netconf_editconfig(session_key, ds_type_t, defop_type, erropt_type, testopt_type, config);
 
     CHECK_ERR_SET_REPLY
 
@@ -2862,7 +2550,6 @@ finalize:
     CHECK_AND_FREE(defop);
     CHECK_AND_FREE(erropt);
     CHECK_AND_FREE(config);
-    CHECK_AND_FREE(source);
     CHECK_AND_FREE(urisource);
     CHECK_AND_FREE(target);
     CHECK_AND_FREE(testopt);
@@ -2881,6 +2568,8 @@ handle_op_copyconfig(json_object *request, unsigned int session_key, int idx)
     char *uri_src = NULL;
     char *uri_trg = NULL;
     json_object *reply = NULL, *configs, *obj;
+    struct lyd_node *content;
+    struct session_with_mutex *locked_session;
 
     DEBUG("Request: copy-config (session %u)", session_key);
 
@@ -2935,6 +2624,22 @@ handle_op_copyconfig(json_object *request, unsigned int session_key, int idx)
             uri_trg = "";
         }
     }
+
+    if (config) {
+        locked_session = session_get_locked(session_key, NULL);
+        if (!locked_session) {
+            ERROR("Unknown session or locking failed.");
+            goto finalize;
+        }
+
+        content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_CONFIG);
+        session_unlock(locked_session);
+
+        free(config);
+        lyd_print_mem(&config, content, LYD_XML, LYP_WITHSIBLINGS);
+        lyd_free_withsiblings(content);
+    }
+
     reply = netconf_copyconfig(session_key, ds_type_s, ds_type_t, config, uri_src, uri_trg);
 
     CHECK_ERR_SET_REPLY
@@ -3125,8 +2830,9 @@ json_object *
 handle_op_generic(json_object *request, unsigned int session_key, int idx)
 {
     json_object *reply = NULL, *contents, *obj;
-    char *config = NULL;
-    char *data = NULL;
+    char *content = NULL, *str;
+    struct lyd_node *data = NULL, *node_content;
+    struct session_with_mutex *locked_session;
 
     DEBUG("Request: generic request (session %u)", session_key);
 
@@ -3142,10 +2848,23 @@ handle_op_generic(json_object *request, unsigned int session_key, int idx)
         reply = create_error_reply("Contents array parameter shorter than sessions.");
         goto finalize;
     }
-    config = strdup(json_object_get_string(obj));
+    content = strdup(json_object_get_string(obj));
     pthread_mutex_unlock(&json_lock);
 
-    reply = netconf_generic(session_key, config, &data);
+    locked_session = session_get_locked(session_key, NULL);
+    if (!locked_session) {
+        ERROR("Unknown session or locking failed.");
+        goto finalize;
+    }
+
+    node_content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), content, LYD_JSON, LYD_OPT_RPC);
+    session_unlock(locked_session);
+
+    free(content);
+    lyd_print_mem(&content, node_content, LYD_XML, LYP_WITHSIBLINGS);
+    lyd_free_withsiblings(node_content);
+
+    reply = netconf_generic(session_key, content, &data);
     if (reply == NULL) {
         GETSPEC_ERR_REPLY
         if (err_reply != NULL) {
@@ -3159,13 +2878,15 @@ handle_op_generic(json_object *request, unsigned int session_key, int idx)
             json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
             pthread_mutex_unlock(&json_lock);
         } else {
-            reply = create_data_reply(data);
-            free(data);
+            lyd_print_mem(&str, data, LYD_JSON, LYP_WITHSIBLINGS);
+            lyd_free_withsiblings(data);
+            reply = create_data_reply(str);
+            free(str);
         }
     }
 
 finalize:
-    CHECK_AND_FREE(config);
+    CHECK_AND_FREE(content);
     return reply;
 }
 
@@ -3228,7 +2949,7 @@ handle_op_reloadhello(json_object *UNUSED(request), unsigned int session_key)
         DEBUG("LOCK mutex %s", __func__);
         pthread_mutex_lock(&locked_session->lock);
         DEBUG("creating temporary NC session.");
-        temp_session = nc_session_connect_channel(locked_session->session, NULL);
+        temp_session = nc_connect_ssh_channel(locked_session->session, NULL);
         if (temp_session != NULL) {
             prepare_status_message(locked_session, temp_session);
             DEBUG("closing temporal NC session.");
@@ -3260,8 +2981,14 @@ handle_op_reloadhello(json_object *UNUSED(request), unsigned int session_key)
 }
 
 void
-notification_history(time_t eventtime, const char *content)
+notification_history(struct nc_session *session, const struct nc_notif *notif)
 {
+    time_t eventtime;
+    char *content;
+    (void)session;
+
+    eventtime = nc_datetime2time(notif->datetime);
+
     json_object *notif_history_array = (json_object *)pthread_getspecific(notif_history_key);
     if (notif_history_array == NULL) {
         ERROR("No list of notification history found.");
@@ -3269,14 +2996,19 @@ notification_history(time_t eventtime, const char *content)
     }
     DEBUG("Got notification from history %lu.", (long unsigned)eventtime);
     pthread_mutex_lock(&json_lock);
-    json_object *notif = json_object_new_object();
-    if (notif == NULL) {
+    json_object *notif_obj = json_object_new_object();
+    if (notif_obj == NULL) {
         ERROR("Could not allocate memory for notification (json).");
         goto failed;
     }
-    json_object_object_add(notif, "eventtime", json_object_new_int64(eventtime));
-    json_object_object_add(notif, "content", json_object_new_string(content));
-    json_object_array_add(notif_history_array, notif);
+    lyd_print_mem(&content, notif->tree, LYD_JSON, 0);
+
+    json_object_object_add(notif_obj, "eventtime", json_object_new_int64(eventtime));
+    json_object_object_add(notif_obj, "content", json_object_new_string(content));
+
+    free(content);
+
+    json_object_array_add(notif_history_array, notif_obj);
 failed:
     pthread_mutex_unlock(&json_lock);
 }
@@ -3288,7 +3020,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
     json_object *js_tmp = NULL;
     struct session_with_mutex *locked_session = NULL;
     struct nc_session *temp_session = NULL;
-    nc_rpc *rpc = NULL;
+    struct nc_rpc *rpc = NULL;
     time_t start = 0;
     time_t stop = 0;
     int64_t from = 0, to = 0;
@@ -3327,9 +3059,9 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
             ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
         }
         DEBUG("creating temporal NC session.");
-        temp_session = nc_session_connect_channel(locked_session->session, NULL);
+        temp_session = nc_connect_ssh_channel(locked_session->session, NULL);
         if (temp_session != NULL) {
-            rpc = nc_rpc_subscribe(NULL /* stream */, NULL /* filter */, &start, &stop);
+            rpc = nc_rpc_subscribe(NULL, NULL, nc_time2datetime(start, NULL), nc_time2datetime(stop, NULL), NC_PARAMTYPE_CONST);
             if (rpc == NULL) {
                 DEBUG("UNLOCK mutex %s", __func__);
                 pthread_mutex_unlock(&locked_session->lock);
@@ -3361,7 +3093,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
                 ERROR("notif_history: cannot set thread-specific hash value.");
             }
 
-            ncntf_dispatch_receive(temp_session, notification_history);
+            nc_recv_notif_dispatch(temp_session, notification_history);
 
             pthread_mutex_lock(&json_lock);
             reply = json_object_new_object();
@@ -3398,7 +3130,7 @@ handle_op_validate(json_object *request, unsigned int session_key)
     json_object *reply = NULL;
     char *target = NULL;
     char *url = NULL;
-    nc_rpc *rpc = NULL;
+    struct nc_rpc *rpc = NULL;
     NC_DATASTORE target_ds;
 
     DEBUG("Request: validate datastore (session %u)", session_key);
@@ -3416,21 +3148,14 @@ handle_op_validate(json_object *request, unsigned int session_key)
 
     /* validation */
     target_ds = parse_datastore(target);
-    if (target_ds == NC_DATASTORE_URL) {
-        if (url != NULL) {
-            rpc = nc_rpc_validate(target_ds, url);
-        }
-    } else if ((target_ds == NC_DATASTORE_RUNNING) || (target_ds == NC_DATASTORE_STARTUP)
-            || (target_ds == NC_DATASTORE_CANDIDATE)) {
-        rpc = nc_rpc_validate(target_ds);
-    }
+    rpc = nc_rpc_validate(target_ds, url, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         DEBUG("mod_netconf: creating rpc request failed");
         reply = create_error_reply("Creation of RPC request failed.");
         goto finalize;
     }
 
-    if ((reply = netconf_op(session_key, rpc, NULL)) == NULL) {
+    if ((reply = netconf_op(session_key, rpc, 0, NULL)) == NULL) {
         CHECK_ERR_SET_REPLY
 
         if (reply == NULL) {
@@ -3490,6 +3215,8 @@ handle_op_merge(json_object *request, unsigned int session_key, int idx)
 {
     json_object *reply = NULL, *configs, *obj;
     char *config = NULL;
+    struct lyd_node *content;
+    struct session_with_mutex *locked_session;
 
     DEBUG("Request: merge (session %u)", session_key);
 
@@ -3507,6 +3234,19 @@ handle_op_merge(json_object *request, unsigned int session_key, int idx)
     }
     config = strdup(json_object_get_string(obj));
     pthread_mutex_unlock(&json_lock);
+
+    locked_session = session_get_locked(session_key, NULL);
+    if (!locked_session) {
+        ERROR("Unknown session or locking failed.");
+        goto finalize;
+    }
+
+    content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_DATA);
+    session_unlock(locked_session);
+
+    free(config);
+    lyd_print_mem(&config, content, LYD_XML, LYP_WITHSIBLINGS);
+    lyd_free_withsiblings(content);
 
     reply = libyang_merge(session_key, config);
 
@@ -3769,7 +3509,7 @@ close_all_nc_sessions(void)
         next_session = locked_session->next;
 
         /* close_and_free_session handles locking on its own */
-        DEBUG("Closing NETCONF session %u (SID %s).", locked_session->session_key, nc_session_get_id(locked_session->session));
+        DEBUG("Closing NETCONF session %u (SID %u).", locked_session->session_key, nc_session_get_id(locked_session->session));
         close_and_free_session(locked_session);
     }
     netconf_sessions_list = NULL;
@@ -3801,7 +3541,7 @@ check_timeout_and_close(void)
         }
         pthread_mutex_lock(&locked_session->lock);
         if ((current_time - locked_session->last_activity) > ACTIVITY_TIMEOUT) {
-            DEBUG("Closing NETCONF session %u (SID %s).", locked_session->session_key, nc_session_get_id(locked_session->session));
+            DEBUG("Closing NETCONF session %u (SID %u).", locked_session->session_key, nc_session_get_id(locked_session->session));
 
             /* close_and_free_session handles locking on its own */
             close_and_free_session(locked_session);
@@ -3938,15 +3678,14 @@ forked_proc(void)
 
     /* setup libnetconf's callbacks */
     nc_verbosity(NC_VERB_DEBUG);
-    nc_callback_print(clb_print);
-    nc_callback_ssh_host_authenticity_check(netconf_callback_ssh_hostkey_check);
-    nc_callback_sshauth_interactive(netconf_callback_sshauth_interactive);
-    nc_callback_sshauth_password(netconf_callback_sshauth_password);
-    nc_callback_sshauth_passphrase(netconf_callback_sshauth_passphrase);
-    nc_callback_error_reply(netconf_callback_error_process);
+    nc_set_print_clb(clb_print);
+    nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check);
+    nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive);
+    nc_client_ssh_set_auth_password_clb(netconf_callback_sshauth_password);
+    nc_client_ssh_set_auth_privkey_passphrase_clb(netconf_callback_sshauth_passphrase);
 
     /* disable publickey authentication */
-    nc_ssh_pref(NC_SSH_AUTH_PUBLIC_KEYS, -1);
+    nc_client_ssh_set_auth_pref(NC_SSH_AUTH_PUBLICKEY, -1);
 
     /* create mutex protecting session list */
     pthread_rwlockattr_init(&lock_attrs);

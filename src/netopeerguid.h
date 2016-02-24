@@ -46,8 +46,8 @@
  * if advised of the possibility of such damage.
  *
  */
-#ifndef __MOD_NETCONF_COMMON_H
-#define __MOD_NETCONF_COMMON_H
+#ifndef _NETOPEERGUID_H
+#define _NETOPEERGUID_H
 
 #include <pthread.h>
 #include <json/json.h>
@@ -74,7 +74,6 @@ struct session_with_mutex {
     char ntfc_subscribed; /**< 0 when notifications are not subscribed */
     char closed; /**< 0 when session is terminated */
     time_t last_activity;
-    struct ly_ctx *ctx;
     pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
 
     struct session_with_mutex *prev;
@@ -130,7 +129,7 @@ void create_err_reply_p();
 void clean_err_reply();
 void free_err_reply();
 
-NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, nc_rpc *rpc,
-                       int timeout, nc_reply **reply);
+NC_MSG_TYPE netconf_send_recv_timed(struct nc_session *session, struct nc_rpc *rpc, int timeout,
+                                    int strict, struct nc_reply **reply);
 
 #endif
