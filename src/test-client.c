@@ -159,7 +159,7 @@ int main (int argc, char* argv[])
     strncpy(addr.sun_path, SOCKET_FILENAME, sizeof(addr.sun_path));
     len = strlen(addr.sun_path) + sizeof(addr.sun_family);
     if (connect(sock, (struct sockaddr *) &addr, len) == -1) {
-        fprintf(stderr, "Connecting to mod_netconf (%s) failed (%s)\n", SOCKET_FILENAME, strerror(errno));
+        fprintf(stderr, "Connecting to netopeerguid (%s) failed (%s)\n", SOCKET_FILENAME, strerror(errno));
         close(sock);
         return (EXIT_FAILURE);
     }
@@ -215,7 +215,9 @@ int main (int argc, char* argv[])
             json_object_object_add(msg, "source", json_object_new_string(line));
         } else {
             readmultiline(&line, &len, "Configuration data (ending with CTRL+D): ");
-            json_object_object_add(msg, "config", json_object_new_string(line));
+            obj = json_object_new_array();
+            json_object_array_add(obj, json_object_new_string(line));
+            json_object_object_add(msg, "configs", obj);
         }
         readline(&line, &len, "Target (running|startup|candidate): ");
         json_object_object_add(msg, "target", json_object_new_string(line));
@@ -254,7 +256,9 @@ int main (int argc, char* argv[])
             json_object_object_add(msg, "error-option", json_object_new_string(line));
         }
         readmultiline(&line, &len, "Configuration data (ending with CTRL+D): ");
-        json_object_object_add(msg, "config", json_object_new_string(line));
+        obj = json_object_new_array();
+        json_object_array_add(obj, json_object_new_string(line));
+        json_object_object_add(msg, "configs", obj);
     } else if (strcmp(argv[1], "get") == 0) {
         /*
          * NETCONF <get>
@@ -357,7 +361,9 @@ int main (int argc, char* argv[])
         json_object_array_add(obj, json_object_new_int(session_key));
         json_object_object_add(msg, "sessions", obj);
         readmultiline(&line, &len, "NETCONF <rpc> content (ending with CTRL+D): ");
-        json_object_object_add(msg, "content", json_object_new_string(line));
+        obj = json_object_new_array();
+        json_object_array_add(obj, json_object_new_string(line));
+        json_object_object_add(msg, "contents", obj);
     } else if (strcmp(argv[1], "getschema") == 0) {
         /*
          * Get information about NETCONF session
