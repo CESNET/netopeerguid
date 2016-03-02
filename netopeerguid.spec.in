@@ -39,4 +39,7 @@ service netopeerguid.rc stop
 rm -f /var/run/netopeerguid.sock
 
 %files
+%{_bindir}/netopeerguid
 %doc README
+@SYSTEMD_SERVICE_FILE@
+

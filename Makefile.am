@@ -9,6 +9,12 @@ RPMDIR = RPMBUILD
 dist-hook:
 	find "$(distdir)" -name .gitignore -exec rm {} \;
 
+DISTCHECK_CONFIGURE_FLAGS="--without-systemd"
+if HAVE_SYSTEMD
+systemddir=@SYSTEMD_UNIT_DIR@
+systemd_DATA=nemea-supervisor.service
+endif
+
 if MAKE_RPMS
 
 RPMFILENAME=$(PACKAGE_NAME)-$(VERSION)
