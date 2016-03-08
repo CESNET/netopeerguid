@@ -156,7 +156,7 @@ Optional:
 
 * key: source (string), value: config|url, default value: config
 * key: default-operation (string), value: merge|replace|none
-* key: error-option (string), value: stop-on-error|continue-on-error|rollback-on-error 
+* key: error-option (string), value: stop-on-error|continue-on-error|rollback-on-error
 * key: uri-source (string), required when "source" is "url", value: uri
 * key: test-option (string), value: notset|testset|set|test, default value: testset
 
@@ -269,7 +269,7 @@ Required when target is "url":
 	const MSG_RELOADHELLO		= 17;
 	const MSG_NTF_GETHISTORY	= 18;
 	const MSG_VALIDATE			= 19;
-	
+
 	/* Enumeration of Message type - New for libyang */
 	const SCH_QUERY				= 100;
 	const SCH_MERGE				= 101;
@@ -416,11 +416,11 @@ Example:
 {
 	"$@node_name": {
 		"enumval": [int8, int16, int32, int64, uint8, uint16, uint32, uint64, float, string]
-	}	
+	}
 }
 ```
 
-##### 5) choice - case 
+##### 5) choice - case
 
 	Example based on https://tools.ietf.org/html/rfc6020#section-7.9
 ```
@@ -487,7 +487,7 @@ Example:
 		"iskey": "false",
 		"children": ["interface", "interface-state"]
 	},
-	"ietf-interfaces:interfaces": {	
+	"ietf-interfaces:interfaces": {
 		"$@interface": {
 			"eltype": "list",
 			"config": "true",
@@ -634,7 +634,7 @@ Example:
 **description**
 ```
 {
-	"description": "The text of description of node"	
+	"description": "The text of description of node"
 }
 ```
 
@@ -719,7 +719,7 @@ Example:
 		"$@leaf-name": {
 			"eltype": “leaf”,
 			...
-		}	
+		}
 	}
 }
 ```
@@ -884,7 +884,7 @@ Example:
 	"$@list-name": {
 		"eltype": “list”,
 		"unique": [“ip”, “port”]
-	}	
+	}
 }
 ```
 
