@@ -1141,7 +1141,7 @@ netconf_connect(const char *host, const char *port, const char *user, const char
     /* if connected successful, add session to the list */
     if (session != NULL) {
         if ((locked_session = calloc(1, sizeof(struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
-            nc_session_free(session);
+            nc_session_free(session, NULL);
             session = NULL;
             free(locked_session);
             locked_session = NULL;
@@ -1156,7 +1156,7 @@ netconf_connect(const char *host, const char *port, const char *user, const char
         /* get exclusive access to sessions_list (conns) */
         DEBUG("LOCK wrlock %s", __func__);
         if (pthread_rwlock_wrlock(&session_lock) != 0) {
-            nc_session_free(session);
+            nc_session_free(session, NULL);
             free(locked_session);
             ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
             return 0;
@@ -1211,7 +1211,7 @@ close_and_free_session(struct session_with_mutex *locked_session)
     locked_session->ntfc_subscribed = 0;
     locked_session->closed = 1;
     if (locked_session->session != NULL) {
-        nc_session_free(locked_session->session);
+        nc_session_free(locked_session->session, NULL);
         locked_session->session = NULL;
     }
     DEBUG("session closed.");
@@ -2953,7 +2953,7 @@ handle_op_reloadhello(json_object *UNUSED(request), unsigned int session_key)
         if (temp_session != NULL) {
             prepare_status_message(locked_session, temp_session);
             DEBUG("closing temporal NC session.");
-            nc_session_free(temp_session);
+            nc_session_free(temp_session, NULL);
             temp_session = NULL;
         } else {
             DEBUG("Reload hello failed due to channel establishment");
@@ -3104,7 +3104,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
             DEBUG("UNLOCK mutex %s", __func__);
             pthread_mutex_unlock(&ntf_history_lock);
             DEBUG("closing temporal NC session.");
-            nc_session_free(temp_session);
+            nc_session_free(temp_session, NULL);
             temp_session = NULL;
         } else {
             DEBUG("UNLOCK mutex %s", __func__);
