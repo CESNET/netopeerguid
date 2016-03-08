@@ -1270,7 +1270,9 @@ netconf_close(unsigned int session_key, json_object **reply)
 
     if (!locked_session->prev) {
         netconf_sessions_list = netconf_sessions_list->next;
-        netconf_sessions_list->prev = NULL;
+        if (netconf_sessions_list) {
+            netconf_sessions_list->prev = NULL;
+        }
     } else {
         locked_session->prev->next = locked_session->next;
         if (locked_session->next) {
