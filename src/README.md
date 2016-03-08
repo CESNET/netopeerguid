@@ -94,6 +94,7 @@ Optional:
 * key: port (string), value: port of the NETCONF server
 * key: user (string), value: username of the user holding the NETCONF session
 * key: capabilities (array of strings), value: list of supported capabilities
+* key: models (array of strings), value: list of models used by the session
 
 Example reply to connect:
 
