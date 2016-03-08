@@ -81,9 +81,33 @@ AC_FUNC_MALLOC
 AC_FUNC_REALLOC
 AC_CHECK_FUNCS([getdelim gettimeofday memset socket strdup strerror])
 
+# allow to skip systemd, enabled by default
+AC_ARG_WITH([systemd],
+        AC_HELP_STRING([--without-systemd], [Disable checking and usage of systemd]),
+        [if test "$withval" = "no"; then
+                withsystemd="no"
+        else
+                withsystemd="yes"
+        fi], [withsystemd="yes"])
+
+if test "x$withsystemd" = "xyes"; then
+        PKG_CHECK_MODULES([systemd], [systemd], [
+        SYSTEMD_UNIT_DIR=$(pkg-config --variable=systemdsystemunitdir systemd)
+        SYSTEMD_SERVICE_FILE="$SYSTEMD_UNIT_DIR/netopeerguid.service"
+        AC_SUBST(SYSTEMD_SERVICE_FILE)
+        AC_SUBST(SYSTEMD_UNIT_DIR)
+        AM_CONDITIONAL([HAVE_SYSTEMD], [true])
+        ], [AM_CONDITIONAL([HAVE_SYSTEMD], [false])])
+else
+        # disabled systemd
+        AM_CONDITIONAL([HAVE_SYSTEMD], [false])
+fi
+
+
 AC_CONFIG_FILES([Makefile
                 config.h
 		netopeerguid.spec
+		netopeerguid.service
 		src/netopeerguid.rc
 		src/Makefile
 		])
