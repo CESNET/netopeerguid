@@ -1,6 +1,6 @@
 # How To Setup Service
 
-- netopeerguid compilation requires libjson-devel, libnetconf-devel, and libyang packages.
+- netopeerguid compilation requires libjson-devel, libnetconf2, and libyang packages.
 
 - run following commands in this directory
 ```
@@ -18,7 +18,7 @@ If there is any problem with connection to the UNIX socket, please check file pe
 ## List of dependencies
 
 * json-c
-* libnetconf
+* libnetconf2
 * libyang
 
 (with development packages)
