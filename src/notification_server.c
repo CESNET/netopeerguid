@@ -27,7 +27,6 @@
 #include <sys/stat.h>
 #include <sys/queue.h>
 #include <fcntl.h>
-#include <assert.h>
 #include <pthread.h>
 #include <errno.h>
 #include <nc_client.h>

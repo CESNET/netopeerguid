@@ -1732,8 +1732,6 @@ netconf_generic(unsigned int session_key, const char *xml_content, struct lyd_no
     struct nc_rpc* rpc = NULL;
     json_object *res = NULL;
 
-    assert(!data || !*data);
-
     /* create requests */
     rpc = nc_rpc_generic_xml(xml_content, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
