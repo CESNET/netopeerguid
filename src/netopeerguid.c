@@ -50,10 +50,10 @@
 #include <unistd.h>
 #include <poll.h>
 #include <time.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/fcntl.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <errno.h>
