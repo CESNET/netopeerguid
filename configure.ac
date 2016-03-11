@@ -68,6 +68,13 @@ LIBS="$LIBS $websockets_LIBS"])])],
 [CFLAGS="$CFLAGS $websockets_CFLAGS -DWITH_NOTIFICATIONS"
 LIBS="$LIBS $websockets_LIBS"])])
 
+AC_ARG_ENABLE([debug],
+    AC_HELP_STRING([--enable-debug],[Compile with debug options]),
+    CFLAGS="$CFLAGS -g -O0"
+    CONFIGURE_PARAMS="--enable-debug $CONFIGURE_PARAMS",
+    CFLAGS="$CFLAGS -O3"
+)
+
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdlib.h string.h sys/socket.h sys/time.h unistd.h])
 
