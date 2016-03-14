@@ -14,12 +14,12 @@ if HAVE_SYSTEMD
 systemddir=@SYSTEMD_UNIT_DIR@
 systemd_DATA=netopeerguid.service
 
-install-exec-hook:
+install-data-hook:
 	@systemctl enable netopeerguid
 	@systemctl --system daemon-reload 2>/dev/null|| true
 	@echo "Run as root: service netopeerguid start"
 else
-install-exec-hook:
+install-data-hook:
 	@chkconfig --add netopeerguid.rc
 	@echo "Run as root: service netopeerguid.rc start"
 endif
