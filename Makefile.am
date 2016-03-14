@@ -12,7 +12,7 @@ dist-hook:
 DISTCHECK_CONFIGURE_FLAGS="--without-systemd"
 if HAVE_SYSTEMD
 systemddir=@SYSTEMD_UNIT_DIR@
-systemd_DATA=nemea-supervisor.service
+systemd_DATA=netopeerguid.service
 endif
 
 if MAKE_RPMS
