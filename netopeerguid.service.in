@@ -21,7 +21,7 @@ After=network.target local-fs.target remote-fs.target
 [Service]
 Type=simple
 Environment=LANG=C
-ExecStart=@bindir@/netopeerguid
+ExecStart=@absbindir@/netopeerguid
 KillMode=process
 PrivateTmp=false
 

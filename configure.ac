@@ -38,6 +38,8 @@ if test "x$CHOWN_GROUP" == x; then
 fi
 AC_SUBST([CHOWN_GROUP])
 
+AC_DEFINE_DIR(absbindir, [bindir], [Path to binaries])
+
 # Check for rpmbuild
 AC_CHECK_PROG(RPMBUILD, [rpmbuild], [rpmbuild], [""])
 
