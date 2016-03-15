@@ -3372,6 +3372,7 @@ thread_routine(void *arg)
                 }
 
                 /* process required operation */
+                reply = NULL;
                 switch (operation) {
                 case MSG_CONNECT:
                     reply = handle_op_connect(request);
