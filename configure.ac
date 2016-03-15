@@ -53,7 +53,7 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 # save clean LIBS and CFLAGS
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
-PKG_CHECK_MODULES([json], [json])
+PKG_CHECK_MODULES([json], [json-c])
 PKG_CHECK_MODULES([netconf2], [libnetconf2])
 PKG_CHECK_MODULES([yang], [libyang])
 AX_PTHREAD([CC="$PTHREAD_CC"], [AC_MSG_ERROR([pthread not found])])
