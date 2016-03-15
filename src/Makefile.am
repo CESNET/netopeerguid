@@ -27,7 +27,7 @@ install-exec-local: mod_netconf.so
 	fi
 
 webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
-	$(CC) $(LIBS) $(CFLAGS) -DHTTPD_INDEPENDENT  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd  -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
+	$(CC) $(CFLAGS) -DHTTPD_INDEPENDENT -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd  -laprutil-1 $(LIBS)
 
 clean-local:
 	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
