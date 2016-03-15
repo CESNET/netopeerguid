@@ -46,7 +46,11 @@ AC_SUBST(httpdmoduledir)
 
 AM_CONDITIONAL([MANUAL_CONFD], [test "x$httpdconfddir" != x])
 if test "x$httpdconfddir" == x; then
-	httpdconfddir="/etc/httpd/conf.d"
+	if test -d "/etc/apache2/conf-available/"; then
+		httpdconfddir="/etc/apache2/conf-available/"
+	else
+		httpdconfddir="/etc/httpd/conf.d"
+	fi
 else
 	httpdconfddir="${prefix}/${httpdconfddir}"
 fi
