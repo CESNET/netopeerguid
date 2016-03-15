@@ -92,6 +92,9 @@ CFLAGS="$json_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
 LIBS="$json_LIBS $netconf_LIBS $xml_LIBS"
 CPPFLAGS="$xml_CPPFLAGS"
 CFLAGS="$CFLAGS -Djsonincdir=$jsonincdir"
+if test -d /usr/include/apache2; then
+CFLAGS="$CFLAGS -I/usr/include/apache2"
+fi
 
 AX_PTHREAD([CC="$PTHREAD_CC"],
 	    [AC_MSG_ERROR([pthread not found])])
