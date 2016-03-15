@@ -282,7 +282,7 @@ prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
             }
             json_object_object_add(s->hello_message, "models", json_obj);
 
-            lyd_free(node);
+            lyd_free(yanglib);
         }
 
         DEBUG("%s", json_object_to_json_string(s->hello_message));
