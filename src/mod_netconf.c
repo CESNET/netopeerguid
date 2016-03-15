@@ -65,7 +65,11 @@
 #include <apr_signal.h>
 #include <apr_strings.h>
 
+#if jsonincdir
 #include <json/json.h>
+#else
+#include <json-c/json.h>
+#endif
 
 #include <libnetconf.h>
 #include <libnetconf_ssh.h>

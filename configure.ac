@@ -81,7 +81,9 @@ AM_CONDITIONAL(MAKE_RPMS, test x$RPMBUILD != x)
 # save clean LIBS and CFLAGS
 SAVEDTEMP_LIBS=$LIBS
 SAVEDTEMP_CFLAGS=$CFLAGS
-PKG_CHECK_MODULES([json], [json])
+PKG_CHECK_MODULES([json], [json], [jsonincdir=1],
+	[PKG_CHECK_MODULES([json], [json-c], [jsonincdir=0])])
+
 PKG_CHECK_MODULES([apr], [apr-1])
 PKG_CHECK_MODULES([aprutil], [apr-util-1])
 PKG_CHECK_MODULES([netconf], [libnetconf])
@@ -89,6 +91,7 @@ PKG_CHECK_MODULES([xml], [libxml-2.0])
 CFLAGS="$json_CFLAGS $netconf_CFLAGS $xml_CFLAGS"
 LIBS="$json_LIBS $netconf_LIBS $xml_LIBS"
 CPPFLAGS="$xml_CPPFLAGS"
+CFLAGS="$CFLAGS -Djsonincdir=$jsonincdir"
 
 AX_PTHREAD([CC="$PTHREAD_CC"],
 	    [AC_MSG_ERROR([pthread not found])])

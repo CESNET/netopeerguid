@@ -52,7 +52,11 @@
 #include <http_log.h>
 #include <http_config.h>
 #include <apr_hash.h>
+#if jsonincdir
 #include <json/json.h>
+#else
+#include <json-c/json.h>
+#endif
 #include <libssh2.h>
 
 /**
