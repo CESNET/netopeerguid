@@ -10,7 +10,7 @@ sudo yum install -y git json-c-devel pkg-config libtool cmake
 fi
 
 (
-wget -q https://red.libssh.org/attachments/download/195/libssh-0.7.3.tar.xz && tar -xf libssh-0.7.3.tar.xz && cd libssh-0.7.3 && mkdir build && cd build &&  cmake .. && make && sudo make install
+wget https://red.libssh.org/attachments/download/195/libssh-0.7.3.tar.xz && tar -xJf libssh-0.7.3.tar.xz && cd libssh-0.7.3 && mkdir build && cd build && cmake -DCMAKE_INSTALL_PREFIX=/usr .. && make && sudo make install
 )
 
 (
