@@ -11,7 +11,7 @@ fi
 
 (
 wget -q https://red.libssh.org/attachments/download/107/libssh-0.6.4.tar.gz&&
-tar -xf libssh-0.6.4.tar.gz&&mkdir lssh&&cd lssh&&cmake ~/libssh-0.6.4&&sudo make install
+tar -xf libssh-0.6.4.tar.gz&&mkdir lssh&&cd lssh&&cmake ../libssh-0.6.4&&sudo make install
 )
 
 (
