@@ -1454,7 +1454,7 @@ netconf_getconfig(unsigned int session_key, NC_DATASTORE source, const char *fil
 {
     struct nc_rpc* rpc;
     struct session_with_mutex *locked_session;
-    json_object *res = NULL, *data_cjson;
+    json_object *res = NULL, *data_cjson = NULL;
     enum json_tokener_error tok_err;
     char *data_json;
     struct lyd_node *data, *sibling, *next;
