@@ -125,7 +125,7 @@ Optional:
 * key: type (int), value: 5
 * key: sessions (array of ints), value: array of SIDs
 
-##### 3) NETCONF <get> (returns merged data)
+##### 3) NETCONF `<get>` (returns merged data)
 
 * key: type (int), value: 6
 * key: sessions (array of ints), value: array of SIDs
@@ -135,7 +135,7 @@ Optional:
 
 * key: filter (string), value: xml subtree filter
 
-##### 4) NETCONF <get-config> (returns array of responses merged with schema)
+##### 4) NETCONF `<get-config>` (returns array of responses merged with schema)
 
 * key: type (int), value: 7
 * key: sessions (array of ints), value: array of SIDs
@@ -146,7 +146,7 @@ Optional:
 
 * key: filter (string), value: xml subtree filter
 
-##### 5) NETCONF <edit-config>
+##### 5) NETCONF `<edit-config>`
 
 * key: type (int), value: 8
 * key: sessions (array of ints), value: array of SIDs
@@ -161,7 +161,7 @@ Optional:
 * key: uri-source (string), required when "source" is "url", value: uri
 * key: test-option (string), value: notset|testset|set|test, default value: testset
 
-##### 6) NETCONF <copy-config>
+##### 6) NETCONF `<copy-config>`
 
 * key: type (int), value: 9
 * key: sessions (array of ints), value: array of SIDs
@@ -174,7 +174,7 @@ Optional:
 * key: uri-target (string), required when "target" is "url", value: uri
 * key: configs (array of sJSON, with the same order as sessions), required when "source" is config”, value: array of new complete configuration data for each session,
 
-##### 7) NETCONF <delete-config>
+##### 7) NETCONF `<delete-config>`
 
 * key: type (int), value: 10
 * key: sessions (array of ints), value: array of SIDs
@@ -184,19 +184,19 @@ Optional:
 
 * key: url (string), value: target URL
 
-##### 8) NETCONF <lock>
+##### 8) NETCONF `<lock>`
 
 * key: type (int), value: 11
 * key: sessions (array of ints), value: array of SIDs
 * key: target (string), value: running|startup|candidate
 
-##### 9) NETCONF <unlock>
+##### 9) NETCONF `<unlock>`
 
 * key: type (int), value: 12
 * key: sessions (array of ints), value: array of SIDs
 * key: target (string), value: running|startup|candidate
 
-##### 10) NETCONF <kill-session>
+##### 10) NETCONF `<kill-session>`
 
 * key: type (int), value: 13
 * key: sessions (array of ints), value: array of SIDs
