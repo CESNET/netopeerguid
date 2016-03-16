@@ -53,7 +53,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <json/json.h>
+#include <json.h>
 #include <ctype.h>
 #include "message_type.h"
 

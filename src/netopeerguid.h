@@ -50,7 +50,7 @@
 #define _NETOPEERGUID_H
 
 #include <pthread.h>
-#include <json/json.h>
+#include <json.h>
 #include <libyang/libyang.h>
 
 #define UNUSED(x) UNUSED_ ## x __attribute__((__unused__))
