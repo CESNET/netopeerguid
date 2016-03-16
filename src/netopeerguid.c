@@ -1454,9 +1454,9 @@ netconf_getconfig(unsigned int session_key, NC_DATASTORE source, const char *fil
 {
     struct nc_rpc* rpc;
     struct session_with_mutex *locked_session;
-    json_object *res = NULL, *data_cjson = NULL;
+    json_object *res = NULL, *data_cjson;
     enum json_tokener_error tok_err;
-    char *data_json;
+    char *data_json = NULL;
     struct lyd_node *data, *sibling, *next;
 
     /* tell server to show all elements even if they have default values */
