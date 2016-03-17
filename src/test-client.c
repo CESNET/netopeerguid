@@ -96,6 +96,7 @@ void print_help(char* progname)
 void readmultiline(char **output, size_t *size, const char *prompt)
 {
     printf(prompt);
+    fflush(stdout);
     if (getdelim (output, size, 'D' - 0x40, stdin) == -1) {
         if (errno) {
             err(errno, "Cannot read input.");
@@ -123,6 +124,7 @@ void readmultiline(char **output, size_t *size, const char *prompt)
 void readline(char **output, size_t *size, const char *prompt)
 {
     printf(prompt);
+    fflush(stdout);
     if (getline (output, size, stdin) == -1) {
         if (errno) {
             err(errno, "Cannot read input.");
@@ -486,12 +488,15 @@ int main (int argc, char* argv[])
         }
         buffer_size += chunk_len+1;
         buffer = realloc (buffer, sizeof(char)*buffer_size);
-        if ((ret = recv (sock, buffer+buffer_len, chunk_len, 0)) == -1 || ret != chunk_len) {
+        while (buffer_len < chunk_len && ret != -1) {
+            ret = recv (sock, buffer+buffer_len, chunk_len-buffer_len, 0);
+            buffer_len += ret;
+        }
+        if (ret == -1 || buffer_len != chunk_len) {
             free (buffer);
             buffer = NULL;
             break;
         }
-        buffer_len += ret;
     }
 msg_complete:
 
