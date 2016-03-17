@@ -3492,6 +3492,7 @@ send_reply:
     }
     free(arg);
     free_err_reply();
+    nc_thread_destroy();
 
     return retval;
 }
@@ -3688,6 +3689,7 @@ forked_proc(void)
     #endif
 
     /* setup libnetconf's callbacks */
+    nc_client_init();
     nc_verbosity(NC_VERB_DEBUG);
     nc_set_print_clb(clb_print);
     nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check);
@@ -3793,12 +3795,14 @@ forked_proc(void)
 
     DEBUG("Exiting from the mod_netconf daemon");
 
+    nc_client_destroy();
     free(ptids);
     close(lsock);
     exit(0);
     return;
 
 error_exit:
+    nc_client_destroy();
     close(lsock);
     free(ptids);
     return;
