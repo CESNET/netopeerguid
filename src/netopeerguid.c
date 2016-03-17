@@ -3451,15 +3451,14 @@ send_reply:
             if (replies) {
                 pthread_mutex_lock(&json_lock);
                 msgtext = json_object_to_json_string(replies);
+                pthread_mutex_unlock(&json_lock);
                 if (asprintf(&chunked_out_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
                     if (buffer != NULL) {
                         free(buffer);
                         buffer = NULL;
                     }
-                    pthread_mutex_unlock(&json_lock);
                     break;
                 }
-                pthread_mutex_unlock(&json_lock);
 
                 DEBUG("Send framed reply json object.");
                 i = 0;
@@ -3475,6 +3474,7 @@ send_reply:
                 DEBUG("Clean reply json object.");
                 pthread_mutex_lock(&json_lock);
                 json_object_put(replies);
+                pthread_mutex_unlock(&json_lock);
                 replies = NULL;
                 DEBUG("Clean message buffer.");
                 CHECK_AND_FREE(chunked_out_msg);
@@ -3483,7 +3483,6 @@ send_reply:
                     free(buffer);
                     buffer = NULL;
                 }
-                pthread_mutex_unlock(&json_lock);
                 clean_err_reply();
             } else {
                 ERROR("Reply is NULL, shouldn't be...");
