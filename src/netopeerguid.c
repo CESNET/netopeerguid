@@ -1263,6 +1263,7 @@ netconf_close(unsigned int session_key, json_object **reply)
          locked_session = locked_session->next);
 
     if (!locked_session) {
+        pthread_rwlock_unlock(&session_lock);
         ERROR("Could not find the session %u to close.", session_key);
         (*reply) = create_error_reply("Internal: Error while finding a session.");
         return EXIT_FAILURE;
@@ -3359,6 +3360,7 @@ thread_routine(void *arg)
             } else {
                 pthread_mutex_lock(&json_lock);
                 if (json_object_object_get_ex(request, "sessions", &sessions) == FALSE) {
+                    pthread_mutex_unlock(&json_lock);
                     add_reply(replies, create_error_reply("Operation missing \"sessions\" arg"), 0);
                     goto send_reply;
                 }
