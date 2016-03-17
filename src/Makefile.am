@@ -12,10 +12,13 @@ bin_PROGRAMS=netopeerguid
 dist-hook:
 	cp $(SRC) $(HDRS) $(distdir)
 
-all: netopeerguid
+all: netopeerguid test-client
 
 netopeerguid$(EXEEXT): netopeerguid.c notification_server.c netopeerguid.h
 	$(CC) $(CFLAGS) -o $@ $(srcdir)/netopeerguid.c $(srcdir)/notification_server.c $(LIBS)
+
+test-client$(EXEEXT): test-client.c
+	$(CC) $(CFLAGS) -o $@ $(srcdir)/test-client.c $(LIBS)
 
 install-exec-hook:
 	$(INSTALL) -d $(DESTDIR)/etc/init.d/;
