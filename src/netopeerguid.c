@@ -1020,6 +1020,7 @@ static void
 node_metadata_model(const struct lys_module *module, json_object *parent)
 {
     json_object *obj, *array, *item;
+    const struct lys_node *node;
     int i;
 
     /* yang-version */
@@ -1081,6 +1082,23 @@ node_metadata_model(const struct lys_module *module, json_object *parent)
             json_object_array_add(array, item);
         }
         json_object_object_add(parent, "includes", array);
+    }
+
+    /* top-nodes */
+    node = NULL;
+    array = NULL;
+    while ((node = lys_getnext(node, NULL, module, LYS_GETNEXT_WITHCHOICE))) {
+        if (node->nodetype & (LYS_RPC | LYS_NOTIF)) {
+            continue;
+        }
+        if (!array) {
+            array = json_object_new_array();
+        }
+        item = json_object_new_string(node->name);
+        json_object_array_add(array, item);
+    }
+    if (array) {
+        json_object_object_add(parent, "top-nodes", array);
     }
 }
 
