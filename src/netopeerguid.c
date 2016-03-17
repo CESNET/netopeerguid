@@ -3267,7 +3267,7 @@ thread_routine(void *arg)
     struct pollfd fds;
     json_object *request = NULL, *replies = NULL, *reply, *sessions = NULL;
     json_object *js_tmp = NULL;
-    int operation = (-1), count, i;
+    int operation = (-1), count, i, sent;
     int status = 0;
     const char *msgtext;
     unsigned int session_key = 0;
@@ -3460,7 +3460,16 @@ send_reply:
                 pthread_mutex_unlock(&json_lock);
 
                 DEBUG("Send framed reply json object.");
-                send(client, chunked_out_msg, strlen(chunked_out_msg) + 1, 0);
+                i = 0;
+                sent = 0;
+                count = strlen(chunked_out_msg) + 1;
+                while (count && ((i = send(client, chunked_out_msg + sent, count, 0)) != -1)) {
+                    sent += i;
+                    count -= i;
+                }
+                if (i == -1) {
+                    ERROR("Sending message failed (%s).", strerror(errno));
+                }
                 DEBUG("Clean reply json object.");
                 pthread_mutex_lock(&json_lock);
                 json_object_put(replies);
