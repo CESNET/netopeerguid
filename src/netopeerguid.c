@@ -1958,8 +1958,10 @@ node_add_children_with_metadata_recursive(const struct lys_node *node, const str
     }
 
 children:
-    LY_TREE_FOR(node->child, child) {
-        node_add_children_with_metadata_recursive(child, cur_module, node_json);
+    if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML))) {
+        LY_TREE_FOR(node->child, child) {
+            node_add_children_with_metadata_recursive(child, cur_module, node_json);
+        }
     }
 }
 
