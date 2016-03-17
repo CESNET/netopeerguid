@@ -812,7 +812,9 @@ node_metadata_choice(struct lys_node_choice *choice, json_object *parent)
     node_metadata_basic((struct lys_node *)choice, parent);
 
     /* default */
-    node_metadata_text(choice->dflt->name, "default", parent);
+    if (choice->dflt) {
+        node_metadata_text(choice->dflt->name, "default", parent);
+    }
 
     /* when */
     node_metadata_when(choice->when, parent);
