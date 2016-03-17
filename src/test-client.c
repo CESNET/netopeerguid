@@ -77,6 +77,8 @@ void print_help(char* progname)
     printf("\tinfo\n");
     printf("\tgeneric\n");
     printf("\tgetschema\n");
+    printf("\tquery\n");
+    printf("\tmerge\n");
 }
 
 /**
