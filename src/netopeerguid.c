@@ -2243,8 +2243,9 @@ create_data_reply(const char *data)
 json_object *
 create_ok_reply(void)
 {
+    json_object *reply;
+
     pthread_mutex_lock(&json_lock);
-    json_object *reply = json_object_new_object();
     reply = json_object_new_object();
     json_object_object_add(reply, "type", json_object_new_int(REPLY_OK));
     pthread_mutex_unlock(&json_lock);
@@ -3441,6 +3442,7 @@ thread_routine(void *arg)
                 pthread_mutex_lock(&json_lock);
                 json_object_put(request);
                 pthread_mutex_unlock(&json_lock);
+                request = NULL;
             }
             DEBUG("Send reply json object.");
 
