@@ -280,48 +280,57 @@ Required when target is "url":
 
 * key: type (int), value: 100
 * key: sessions (array of ints), value: array of SIDs
-* key: filters (array of strings with same index order as sessions), value: array of XPath (with "prefix" = module name) values of target node in schema (start with ‘/’) or module names
+* key: filters (array of strings with same index order as sessions), value: array of XPath (with "prefix" = module name) values of target node in schema (start with '/') or module names (do not start with '/')
+
+In module query, the top-nodes array includes only nodes that can appear in data or some descendant can (container, choice, leaf, leaflist, list, anyxml).
 
 Optional:
 
-* key: load_children(boolean, default = false), value: if set to true, children schema information will be loaded too (blue part in example 1). Otherwise only value "$@name": {'children': [...]} will be loaded.
+* key: load_children(boolean, default = false), value: if set to true, children schema information will be loaded too. Otherwise only part "$@name": {'children': [...]} will be loaded.
 
-##### 1. Example response for "/ietf-interfaces:interfaces":
+##### 1. Example response for "/ietf-interfaces:interfaces" with load_children:
 
 (partialy based on https://tools.ietf.org/html/draft-ietf-netmod-yang-json-05#appendix-A)
 ```
 {
 	"$@ietf-interfaces:interfaces": {
-		"eltype": "leaf",
-		"config": "false",
-		"type": "enumeration",
-		"enumval": [int8, int16, int32, int64, uint8, uint16, uint32, uint64, float, string],
-		"description": "The data type of the parameters argument.,
-		"mandatory": "false",
-		"iskey": "false",
-		"children": [interface, interface-state]
+		"eltype": "container",
+		"description": "Interface configuration parameters.",
+		"config": true,
+		"status": "current",
+		"mandatory": false,
+		"children": [
+			"interface"
+		]
 	},
-
-"ietf-interfaces:interfaces": {
-		"$@interface": {
-			"eltype": "list",
-			"config": "true",
-			"type": "enumeration",
-			"iskey": "false"
-		},
-		"$@interface-state": { ... }
+	"ietf-interfaces:interfaces": {
+		"$@interface": { ... }
+		...
 	}
 }
 ```
 
-##### 2. Example response for "/ietf-interfaces:interfaces/interface":
+##### 2. Example response for "/ietf-interfaces:interfaces/interface" without load_children:
 ```
 {
-	"$@interface": {
+	"$@ietf-interfaces:interface": {
 		"eltype": "list",
-		"config": "true",
-		"type": "enumeration",
-		"iskey": "false"
+		"description": " ... ",
+		"config": true,
+		"status": "current",
+		"mandatory": false,
+		"keys": [
+			"name"
+		],
+		"children": [
+			"name",
+			"description",
+			"type",
+			"enabled",
+			"link-up-down-trap-enable",
+			"ipv4",
+			"ipv6"
+		]
 	}
 }
 ```
@@ -330,19 +339,52 @@ Optional:
 ```
 {
 	"$@@ietf-interfaces": {
-		"yang-version": “1.0”,
+		"yang-version": "1.0",
 		"namespace": "urn:ietf:params:xml:ns:yang:ietf-interfaces",
-		"prefix": “if”,
+		"prefix": "if",
+		"contact": " ... ",
+		"organization": "IETF NETMOD (NETCONF Data Modeling Language) Working Group",
+		"revision": "2014-05-08",
+		"description": " ... ",
 		"imports": [
 			{
-				"name": “ietf-yang-types”,
-				"prefix": “yang”
+				"name": "ietf-yang-types",
+				"prefix": "yang"
 			}
 		],
-		"organization": "IETF NETMOD (NETCONF Data Modeling Language) …”,
-		"contact": “WG Web:   <http://tools.ietf.org/wg/netmod/>...”,
-		"description": "This module contains a collection of YANG definitions…”,
-		"revision": "2014-05-08"
+		"top-nodes": [
+			"interfaces",
+			"interfaces-state"
+		]
+	}
+}
+```
+
+##### 4. Example response for "ietf-ip" with load_children:
+```
+{
+	"$@@ietf-ip": {
+		"yang-version": "1.0",
+		"namespace": "urn:ietf:params:xml:ns:yang:ietf-ip",
+		"prefix": "ip",
+		"contact": " ... ",
+		"organization": "IETF NETMOD (NETCONF Data Modeling Language) Working Group",
+		"revision": "2014-06-16",
+		"description": " ... ",
+		"imports": [
+			{
+				"name": "ietf-interfaces",
+				"prefix": "if"
+			},
+			{
+				"name": "ietf-inet-types",
+				"prefix": "inet"
+			},
+			{
+				"name": "ietf-yang-types",
+				"prefix": "yang"
+			}
+		]
 	}
 }
 ```
