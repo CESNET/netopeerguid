@@ -1544,7 +1544,7 @@ netconf_getschema(unsigned int session_key, const char *identifier, const char *
     struct nc_rpc *rpc;
     struct lyd_node *data = NULL;
     json_object *res = NULL;
-    char *model_data = NULL, *anyxml, *ptr, *ptr2;
+    char *model_data = NULL;
 
     /* create requests */
     rpc = nc_rpc_getschema(identifier, version, format, NC_PARAMTYPE_CONST);
@@ -1561,17 +1561,13 @@ netconf_getschema(unsigned int session_key, const char *identifier, const char *
         (*err) = NULL;
 
         if (data) {
-            lyxml_print_mem(&anyxml, ((struct lyd_node_anyxml *)data)->value, 0);
-
-            /* it's with the data root node, remove it */
-            if (anyxml) {
-                ptr = strchr(anyxml, '>');
-                ++ptr;
-
-                ptr2 = strrchr(anyxml, '<');
-
-                model_data = strndup(ptr, strlen(ptr) - strlen(ptr2));
-                free(anyxml);
+            if (((struct lyd_node_anyxml *)data)->xml_struct) {
+                lyxml_print_mem(&model_data, ((struct lyd_node_anyxml *)data)->value.xml, 0);
+            } else {
+                model_data = strdup(((struct lyd_node_anyxml *)data)->value.str);
+            }
+            if (!model_data) {
+                ERROR("memory allocation fail (%s:%d)", __FILE__, __LINE__);
             }
         }
     }
@@ -2000,7 +1996,7 @@ libyang_query(unsigned int session_key, const char *filter, int load_children)
     session_user_activity(nc_session_get_username(locked_session->session));
 
     if (filter[0] == '/') {
-        node = ly_ctx_get_node(nc_session_get_ctx(locked_session->session), filter);
+        node = ly_ctx_get_node(nc_session_get_ctx(locked_session->session), NULL, filter);
         if (!node) {
             ret = create_error_reply("Failed to resolve XPath filter node.");
             goto finish;
