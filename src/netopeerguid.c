@@ -3347,6 +3347,7 @@ thread_routine(void *arg)
 
         DEBUG("Check read buffer.");
         if (buffer != NULL) {
+            DEBUG("Received message:\n%s\n", buffer);
             enum json_tokener_error jerr;
             pthread_mutex_lock(&json_lock);
             request = json_tokener_parse_verbose(buffer, &jerr);
@@ -3493,7 +3494,7 @@ send_reply:
                     break;
                 }
 
-                DEBUG("Send framed reply json object.");
+                DEBUG("Sending message:\n%s\n", chunked_out_msg);
                 i = 0;
                 sent = 0;
                 count = strlen(chunked_out_msg) + 1;
