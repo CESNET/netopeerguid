@@ -2500,9 +2500,11 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     testopt = get_param_string(request, "test-option");
     pthread_mutex_unlock(&json_lock);
 
-    if (target != NULL) {
-        ds_type_t = parse_datastore(target);
+    if (!target) {
+        ERROR("Missing the target parameter.");
+        goto finalize;
     }
+    ds_type_t = parse_datastore(target);
 
     if (defop != NULL) {
         if (strcmp(defop, "merge") == 0) {
