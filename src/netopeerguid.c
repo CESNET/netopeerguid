@@ -2551,9 +2551,20 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
         content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_EDIT);
         session_unlock(locked_session);
 
+        if (!content) {
+            ERROR("Failed to parse edit-config content.");
+            goto finalize;
+        }
+
         free(config);
+        config = NULL;
+
         lyd_print_mem(&config, content, LYD_XML, LYP_WITHSIBLINGS);
         lyd_free_withsiblings(content);
+        if (!config) {
+            ERROR("Failed to print edit-config content.");
+            goto finalize;
+        }
     } else {
         config = urisource;
     }
