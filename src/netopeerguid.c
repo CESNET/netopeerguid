@@ -3476,6 +3476,7 @@ send_reply:
                 pthread_mutex_lock(&json_lock);
                 msgtext = json_object_to_json_string(replies);
                 pthread_mutex_unlock(&json_lock);
+                DEBUG("Sending message:\n%s\n", msgtext);
                 if (asprintf(&chunked_out_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
                     if (buffer != NULL) {
                         free(buffer);
@@ -3484,7 +3485,6 @@ send_reply:
                     break;
                 }
 
-                DEBUG("Sending message:\n%s\n", chunked_out_msg);
                 i = 0;
                 sent = 0;
                 count = strlen(chunked_out_msg) + 1;
