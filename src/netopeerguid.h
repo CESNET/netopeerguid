@@ -51,6 +51,7 @@
 
 #include <pthread.h>
 #include <json.h>
+#include <syslog.h>
 #include <libyang/libyang.h>
 
 #define UNUSED(x) UNUSED_ ## x __attribute__((__unused__))
@@ -89,18 +90,25 @@ extern pthread_rwlock_t session_lock; /**< mutex protecting netconf_session_list
 
 extern pthread_key_t err_reply_key;
 extern pthread_mutex_t json_lock;
+extern int daemonize;
 
 json_object *create_error_reply(const char *errmess);
 
-#define DEBUG(...) do { \
+#define DEBUG(...) \
+if (daemonize) { \
+    syslog(LOG_DEBUG, __VA_ARGS__); \
+} else { \
     fprintf(stderr, __VA_ARGS__); \
     fprintf(stderr, "\n"); \
-} while (0);
+}
 
-#define ERROR(...) do { \
+#define ERROR(...) \
+if (daemonize) { \
+    syslog(LOG_ERR, __VA_ARGS__); \
+} else { \
     fprintf(stderr, __VA_ARGS__); \
     fprintf(stderr, "\n"); \
-} while (0);
+}
 
 #define GETSPEC_ERR_REPLY \
 json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key); \

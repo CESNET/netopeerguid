@@ -56,6 +56,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <pwd.h>
+#include <syslog.h>
 #include <errno.h>
 #include <limits.h>
 #include <grp.h>
@@ -113,6 +114,7 @@ static pthread_key_t notif_history_key;
 pthread_key_t err_reply_key;
 volatile int isterminated = 0;
 static char* password;
+int daemonize;
 
 json_object *create_ok_reply(void);
 json_object *create_data_reply(const char *data);
@@ -2086,16 +2088,16 @@ clb_print(NC_VERB_LEVEL level, const char *msg)
 {
     switch (level) {
     case NC_VERB_ERROR:
-        ERROR("ERROR: %s", msg);
+        ERROR("lib ERROR: %s", msg);
         break;
     case NC_VERB_WARNING:
-        ERROR("WARNING: %s", msg);
+        ERROR("lib WARNING: %s", msg);
         break;
     case NC_VERB_VERBOSE:
-        ERROR("VERBOSE: %s", msg);
+        ERROR("lib VERBOSE: %s", msg);
         break;
     case NC_VERB_DEBUG:
-        DEBUG("DEBUG: %s", msg);
+        DEBUG("lib DEBUG: %s", msg);
         break;
     }
 
@@ -3837,7 +3839,7 @@ main(int argc, char **argv)
 {
     struct sigaction action;
     sigset_t block_mask;
-    int daemonize = 0, i;
+    int i;
 
     if (argc > 3) {
         printf("Usage: [--(h)elp] [--(d)aemon] [socket-path]\n");
@@ -3856,9 +3858,12 @@ main(int argc, char **argv)
         }
     }
 
-    if (daemonize && (daemon(0, 0) == -1)) {
-        ERROR("daemon() failed (%s)", strerror(errno));
-        return 1;
+    if (daemonize) {
+        if (daemon(0, 0) == -1) {
+            ERROR("daemon() failed (%s)", strerror(errno));
+            return 1;
+        }
+        openlog("netopeerguid", LOG_PID, LOG_DAEMON);
     }
 
     sigfillset(&block_mask);
@@ -3870,5 +3875,8 @@ main(int argc, char **argv)
 
     forked_proc();
     DEBUG("Terminated");
+    if (daemonize) {
+        closelog();
+    }
     return 0;
 }
