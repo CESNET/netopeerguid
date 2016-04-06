@@ -2369,7 +2369,7 @@ handle_op_connect(json_object *request)
 json_object *
 handle_op_disconnect(json_object *UNUSED(request), unsigned int session_key)
 {
-    json_object *reply;
+    json_object *reply = NULL;
 
     DEBUG("Request: disconnect (session %u)", session_key);
 
