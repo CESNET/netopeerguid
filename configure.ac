@@ -72,7 +72,7 @@ LIBS="$LIBS $websockets_LIBS"])])
 
 AC_ARG_ENABLE([debug],
     AC_HELP_STRING([--enable-debug],[Compile with debug options]),
-    CFLAGS="$CFLAGS -g -O0"
+    CFLAGS="$CFLAGS -g -O0 -DDBG"
     CONFIGURE_PARAMS="--enable-debug $CONFIGURE_PARAMS",
     CFLAGS="$CFLAGS -O3"
 )

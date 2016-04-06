@@ -94,6 +94,8 @@ extern int daemonize;
 
 json_object *create_error_reply(const char *errmess);
 
+#ifdef DBG
+
 #define DEBUG(...) \
 if (daemonize) { \
     syslog(LOG_DEBUG, __VA_ARGS__); \
@@ -101,6 +103,12 @@ if (daemonize) { \
     fprintf(stderr, __VA_ARGS__); \
     fprintf(stderr, "\n"); \
 }
+
+#else
+
+#define DEBUG(...)
+
+#endif
 
 #define ERROR(...) \
 if (daemonize) { \
