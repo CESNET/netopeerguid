@@ -3334,10 +3334,7 @@ thread_routine(void *arg)
             break;
         }
 
-        DEBUG("Get framed message...");
         buffer = get_framed_message(client);
-
-        DEBUG("Check read buffer.");
         if (buffer != NULL) {
             DEBUG("Received message:\n%s\n", buffer);
             enum json_tokener_error jerr;
@@ -3463,14 +3460,12 @@ thread_routine(void *arg)
             /* free parameters */
             operation = (-1);
 
-            DEBUG("Clean request json object.");
             if (request != NULL) {
                 pthread_mutex_lock(&json_lock);
                 json_object_put(request);
                 pthread_mutex_unlock(&json_lock);
                 request = NULL;
             }
-            DEBUG("Send reply json object.");
 
 send_reply:
             /* send reply to caller */
@@ -3497,12 +3492,11 @@ send_reply:
                 if (i == -1) {
                     ERROR("Sending message failed (%s).", strerror(errno));
                 }
-                DEBUG("Clean reply json object.");
                 pthread_mutex_lock(&json_lock);
                 json_object_put(replies);
                 pthread_mutex_unlock(&json_lock);
                 replies = NULL;
-                DEBUG("Clean message buffer.");
+
                 CHECK_AND_FREE(chunked_out_msg);
                 chunked_out_msg = NULL;
                 if (buffer) {
