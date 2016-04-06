@@ -166,16 +166,7 @@ netconf_callback_sshauth_interactive(const char *UNUSED(name), const char *UNUSE
 }
 
 void
-netconf_callback_error_process(const char *UNUSED(tag),
-        const char *UNUSED(type),
-        const char *UNUSED(severity),
-        const char *UNUSED(apptag),
-        const char *UNUSED(path),
-        const char *message,
-        const char *UNUSED(attribute),
-        const char *UNUSED(element),
-        const char *UNUSED(ns),
-        const char *UNUSED(sid))
+netconf_callback_error_process(const char *message)
 {
     json_object **err_reply_p = (json_object **) pthread_getspecific(err_reply_key);
     if (err_reply_p == NULL) {
@@ -2093,25 +2084,24 @@ finish:
 void
 clb_print(NC_VERB_LEVEL level, const char *msg)
 {
-#define FOREACH(I) \
-        I(NC_VERB_ERROR) I(NC_VERB_WARNING)
-
-#define CASE(VAL) case VAL: ERROR("%s: %s", #VAL, msg); \
-    break;
-
     switch (level) {
-    FOREACH(CASE);
+    case NC_VERB_ERROR:
+        ERROR("ERROR: %s", msg);
+        break;
+    case NC_VERB_WARNING:
+        ERROR("WARNING: %s", msg);
+        break;
     case NC_VERB_VERBOSE:
+        ERROR("VERBOSE: %s", msg);
+        break;
     case NC_VERB_DEBUG:
         DEBUG("DEBUG: %s", msg);
         break;
     }
+
     if (level == NC_VERB_ERROR) {
         /* return global error */
-        netconf_callback_error_process(NULL /* tag */, NULL /* type */,
-                NULL /* severity */, NULL /* apptag */,
-                NULL /* path */, msg, NULL /* attribute */,
-                NULL /* element */, NULL /* ns */, NULL /* sid */);
+        netconf_callback_error_process(msg);
     }
 }
 
