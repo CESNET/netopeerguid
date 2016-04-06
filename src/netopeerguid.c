@@ -3714,7 +3714,7 @@ forked_proc(void)
 
     /* setup libnetconf's callbacks */
     nc_client_init();
-    nc_verbosity(NC_VERB_DEBUG);
+    nc_verbosity(NC_VERB_VERBOSE);
     nc_set_print_clb(clb_print);
     nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check);
     nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive);
