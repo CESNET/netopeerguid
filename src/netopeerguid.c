@@ -1216,7 +1216,6 @@ close_and_free_session(struct session_with_mutex *locked_session)
 {
     int i;
 
-    DEBUG("lock private lock.");
     DEBUG("LOCK mutex %s", __func__);
     if (pthread_mutex_lock(&locked_session->lock) != 0) {
         ERROR("Error while locking rwlock");
@@ -1228,13 +1227,11 @@ close_and_free_session(struct session_with_mutex *locked_session)
         locked_session->session = NULL;
     }
     DEBUG("session closed.");
-    DEBUG("unlock private lock.");
     DEBUG("UNLOCK mutex %s", __func__);
     if (pthread_mutex_unlock(&locked_session->lock) != 0) {
         ERROR("Error while locking rwlock");
     }
 
-    DEBUG("unlock session lock.");
     DEBUG("closed session, disabled notif(?), wait 0.5s");
     usleep(500000); /* let notification thread stop */
 
@@ -1263,9 +1260,8 @@ netconf_close(unsigned int session_key, json_object **reply)
     DEBUG("Session to close: %u", session_key);
 
     /* get exclusive (write) access to sessions_list (conns) */
-    DEBUG("lock session lock.");
     DEBUG("LOCK wrlock %s", __func__);
-    if (pthread_rwlock_wrlock (&session_lock) != 0) {
+    if (pthread_rwlock_wrlock(&session_lock) != 0) {
         ERROR("Error while locking rwlock");
         (*reply) = create_error_reply("Internal: Error while locking.");
         return EXIT_FAILURE;
@@ -1276,6 +1272,7 @@ netconf_close(unsigned int session_key, json_object **reply)
          locked_session = locked_session->next);
 
     if (!locked_session) {
+        DEBUG("UNLOCK wrlock %s", __func__);
         pthread_rwlock_unlock(&session_lock);
         ERROR("Could not find the session %u to close.", session_key);
         (*reply) = create_error_reply("Internal: Error while finding a session.");
@@ -3109,7 +3106,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
 
             DEBUG("UNLOCK mutex %s", __func__);
             pthread_mutex_unlock(&locked_session->lock);
-            DEBUG("LOCK mutex %s", __func__);
+            DEBUG("LOCK ntf mutex %s", __func__);
             pthread_mutex_lock(&ntf_history_lock);
             pthread_mutex_lock(&json_lock);
             json_object *notif_history_array = json_object_new_array();
@@ -3126,7 +3123,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
             //json_object_put(notif_history_array);
             pthread_mutex_unlock(&json_lock);
 
-            DEBUG("UNLOCK mutex %s", __func__);
+            DEBUG("UNLOCK ntf mutex %s", __func__);
             pthread_mutex_unlock(&ntf_history_lock);
             DEBUG("closing temporal NC session.");
             nc_session_free(temp_session, NULL);
@@ -3532,7 +3529,7 @@ close_all_nc_sessions(void)
 
     /* get exclusive access to sessions_list (conns) */
     DEBUG("LOCK wrlock %s", __func__);
-    if ((ret = pthread_rwlock_wrlock (&session_lock)) != 0) {
+    if ((ret = pthread_rwlock_wrlock(&session_lock)) != 0) {
         ERROR("Error while locking rwlock: %d (%s)", ret, strerror(ret));
         return;
     }
@@ -3548,7 +3545,7 @@ close_all_nc_sessions(void)
 
     /* get exclusive access to sessions_list (conns) */
     DEBUG("UNLOCK wrlock %s", __func__);
-    if (pthread_rwlock_unlock (&session_lock) != 0) {
+    if (pthread_rwlock_unlock(&session_lock) != 0) {
         ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
     }
 }
@@ -3562,6 +3559,7 @@ check_timeout_and_close(void)
     int ret;
 
     /* get exclusive access to sessions_list (conns) */
+    DEBUG("LOCK wrlock %s", __func__);
     if ((ret = pthread_rwlock_wrlock(&session_lock)) != 0) {
         DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
         return;
@@ -3571,17 +3569,14 @@ check_timeout_and_close(void)
         if (ns == NULL) {
             continue;
         }
-        pthread_mutex_lock(&locked_session->lock);
         if ((current_time - locked_session->last_activity) > ACTIVITY_TIMEOUT) {
             DEBUG("Closing NETCONF session %u (SID %u).", locked_session->session_key, nc_session_get_id(locked_session->session));
 
             /* close_and_free_session handles locking on its own */
             close_and_free_session(locked_session);
-        } else {
-            pthread_mutex_unlock(&locked_session->lock);
         }
     }
-    /* get exclusive access to sessions_list (conns) */
+    DEBUG("UNLOCK wrlock %s", __func__);
     if (pthread_rwlock_unlock(&session_lock) != 0) {
         ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
     }
