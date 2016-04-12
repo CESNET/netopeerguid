@@ -3559,7 +3559,7 @@ check_timeout_and_close(void)
     int ret;
 
     /* get exclusive access to sessions_list (conns) */
-    DEBUG("LOCK wrlock %s", __func__);
+    //DEBUG("LOCK wrlock %s", __func__);
     if ((ret = pthread_rwlock_wrlock(&session_lock)) != 0) {
         DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
         return;
@@ -3576,7 +3576,7 @@ check_timeout_and_close(void)
             close_and_free_session(locked_session);
         }
     }
-    DEBUG("UNLOCK wrlock %s", __func__);
+    //DEBUG("UNLOCK wrlock %s", __func__);
     if (pthread_rwlock_unlock(&session_lock) != 0) {
         ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
     }
