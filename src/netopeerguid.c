@@ -3333,7 +3333,7 @@ thread_routine(void *arg)
 
         buffer = get_framed_message(client);
         if (buffer != NULL) {
-            DEBUG("Received message:\n%s\n", buffer);
+            DEBUG("Received message:\n%.*s\n", 1024, buffer);
             enum json_tokener_error jerr;
             pthread_mutex_lock(&json_lock);
             request = json_tokener_parse_verbose(buffer, &jerr);
@@ -3470,7 +3470,7 @@ send_reply:
                 pthread_mutex_lock(&json_lock);
                 msgtext = json_object_to_json_string(replies);
                 pthread_mutex_unlock(&json_lock);
-                DEBUG("Sending message:\n%s\n", msgtext);
+                DEBUG("Sending message:\n%.*s\n", 1024, msgtext);
                 if (asprintf(&chunked_out_msg, "\n#%d\n%s\n##\n", (int)strlen(msgtext), msgtext) == -1) {
                     if (buffer != NULL) {
                         free(buffer);
@@ -3553,8 +3553,7 @@ close_all_nc_sessions(void)
 static void
 check_timeout_and_close(void)
 {
-    struct nc_session *ns = NULL;
-    struct session_with_mutex *locked_session = NULL;
+    struct session_with_mutex *locked_session = NULL, *next_session;
     time_t current_time = time(NULL);
     int ret;
 
@@ -3564,17 +3563,35 @@ check_timeout_and_close(void)
         DEBUG("Error while locking rwlock: %d (%s)", ret, strerror(ret));
         return;
     }
-    for (locked_session = netconf_sessions_list; locked_session; locked_session = locked_session->next) {
-        ns = locked_session->session;
-        if (ns == NULL) {
+
+    locked_session = netconf_sessions_list;
+    while (locked_session) {
+        next_session = locked_session->next;
+
+        if (!locked_session->session) {
             continue;
         }
         if ((current_time - locked_session->last_activity) > ACTIVITY_TIMEOUT) {
             DEBUG("Closing NETCONF session %u (SID %u).", locked_session->session_key, nc_session_get_id(locked_session->session));
 
+            /* remove it from the list */
+            if (!locked_session->prev) {
+                netconf_sessions_list = netconf_sessions_list->next;
+                if (netconf_sessions_list) {
+                    netconf_sessions_list->prev = NULL;
+                }
+            } else {
+                locked_session->prev->next = locked_session->next;
+                if (locked_session->next) {
+                    locked_session->next->prev = locked_session->prev;
+                }
+            }
+
             /* close_and_free_session handles locking on its own */
             close_and_free_session(locked_session);
         }
+
+        locked_session = next_session;
     }
     //DEBUG("UNLOCK wrlock %s", __func__);
     if (pthread_rwlock_unlock(&session_lock) != 0) {
