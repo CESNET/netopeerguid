@@ -2832,7 +2832,7 @@ handle_op_info(json_object *UNUSED(request), unsigned int session_key)
             ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
         }
         if (locked_session->hello_message != NULL) {
-            reply = locked_session->hello_message;
+            reply = json_object_get(locked_session->hello_message);
         } else {
             reply = create_error_reply("Invalid session identifier.");
         }
@@ -2997,7 +2997,7 @@ handle_op_reloadhello(json_object *UNUSED(request), unsigned int session_key)
     }
 
     if ((reply == NULL) && (locked_session->hello_message != NULL)) {
-        reply = locked_session->hello_message;
+        reply = json_object_get(locked_session->hello_message);
     }
 
     return reply;
