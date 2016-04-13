@@ -310,6 +310,7 @@ clean_err_reply()
             pthread_mutex_lock(&json_lock);
             json_object_put(*err_reply);
             pthread_mutex_unlock(&json_lock);
+            *err_reply = NULL;
         }
         if (pthread_setspecific(err_reply_key, err_reply) != 0) {
             ERROR("Cannot set thread-specific hash value.");
