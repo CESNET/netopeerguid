@@ -2395,7 +2395,7 @@ handle_op_get(json_object *request, unsigned int session_key)
     if (json_object_object_get_ex(request, "strict", &obj) == FALSE) {
         pthread_mutex_unlock(&json_lock);
         reply = create_error_reply("Missing strict parameter.");
-        return reply;
+        goto finalize;
     }
     strict = json_object_get_boolean(obj);
     pthread_mutex_unlock(&json_lock);
@@ -2407,6 +2407,8 @@ handle_op_get(json_object *request, unsigned int session_key)
         free(data);
     }
 
+finalize:
+    CHECK_AND_FREE(filter);
     return reply;
 }
 
@@ -2431,7 +2433,7 @@ handle_op_getconfig(json_object *request, unsigned int session_key)
     if (json_object_object_get_ex(request, "strict", &obj) == FALSE) {
         pthread_mutex_unlock(&json_lock);
         reply = create_error_reply("Missing strict parameter.");
-        return reply;
+        goto finalize;
     }
     strict = json_object_get_boolean(obj);
     pthread_mutex_unlock(&json_lock);
