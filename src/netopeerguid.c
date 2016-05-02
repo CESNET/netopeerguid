@@ -1013,7 +1013,7 @@ node_metadata_rpc(struct lys_node_rpc *rpc, json_object *parent)
 static void
 node_metadata_model(const struct lys_module *module, json_object *parent)
 {
-    json_object *obj, *array, *item;
+    json_object *obj, *array, *array2, *item;
     const struct lys_node *node;
     int i;
 
@@ -1078,21 +1078,33 @@ node_metadata_model(const struct lys_module *module, json_object *parent)
         json_object_object_add(parent, "includes", array);
     }
 
-    /* top-nodes */
+    /* top-nodes and RPCs */
     node = NULL;
     array = NULL;
+    array2 = NULL;
     while ((node = lys_getnext(node, NULL, module, LYS_GETNEXT_WITHCHOICE))) {
-        if (node->nodetype & (LYS_RPC | LYS_NOTIF)) {
+        if (node->nodetype == LYS_NOTIF) {
             continue;
         }
-        if (!array) {
-            array = json_object_new_array();
+        if (node->nodetype == LYS_RPC) {
+            if (!array2) {
+                array2 = json_object_new_array();
+            }
+            item = json_object_new_string(node->name);
+            json_object_array_add(array2, item);
+        } else {
+            if (!array) {
+                array = json_object_new_array();
+            }
+            item = json_object_new_string(node->name);
+            json_object_array_add(array, item);
         }
-        item = json_object_new_string(node->name);
-        json_object_array_add(array, item);
     }
     if (array) {
         json_object_object_add(parent, "top-nodes", array);
+    }
+    if (array2) {
+        json_object_object_add(parent, "rpcs", array2);
     }
 }
 
