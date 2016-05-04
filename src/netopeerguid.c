@@ -349,7 +349,7 @@ session_get_locked(unsigned int session_key, json_object **err)
         }
         return NULL;
     }
-    /* get session where send the RPC */
+    /* get session where to send the RPC */
     for (locked_session = netconf_sessions_list;
          locked_session && (locked_session->session_key != session_key);
          locked_session = locked_session->next);
@@ -357,7 +357,7 @@ session_get_locked(unsigned int session_key, json_object **err)
         if (*err) {
             *err = create_error_reply("Session not found.");
         }
-        return NULL;
+        goto rwlock_fail;
     }
 
     /* get exclusive access to session */
@@ -366,11 +366,11 @@ session_get_locked(unsigned int session_key, json_object **err)
         if (*err) {
             *err = create_error_reply("Locking failed.");
         }
-        goto wrlock_fail;
+        goto rwlock_fail;
     }
     return locked_session;
 
-wrlock_fail:
+rwlock_fail:
     DEBUG("UNLOCK wrlock %s", __func__);
     pthread_rwlock_unlock(&session_lock);
     return NULL;

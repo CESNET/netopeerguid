@@ -420,7 +420,6 @@ void* notification_thread(void* arg)
 	return (NULL);
 }
 
-
 int notif_subscribe(struct session_with_mutex *locked_session, const char *session_id, time_t start_time, time_t stop_time)
 {
 	time_t start = -1;
@@ -726,7 +725,6 @@ static struct libwebsocket_protocols protocols[] = {
 	},
 	{ NULL, NULL, 0, 0, 0, NULL, NULL, 0 } /* terminator */
 };
-
 
 /**
  * initialization of notification module
