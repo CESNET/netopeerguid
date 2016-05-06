@@ -46,7 +46,7 @@ static int max_poll_elements;
 static struct pollfd *pollfds;
 static int *fd_lookup;
 static int count_pollfds;
-static struct libwebsocket_context *context = NULL;
+static struct lws_context *context = NULL;
 
 extern struct session_with_mutex *netconf_sessions_list;
 static pthread_key_t thread_key;
@@ -76,9 +76,9 @@ enum demo_protocols {
     DEMO_PROTOCOL_COUNT
 };
 
-
-#define LOCAL_RESOURCE_PATH "."
-char *resource_path = LOCAL_RESOURCE_PATH;
+#define SERVER_CERT_DIR "."
+#define SERVER_CERT "server.crt"
+#define SERVER_KEY "server.key"
 
 /*
  * We take a strict whitelist approach to stop ../ attacks
@@ -103,9 +103,8 @@ struct per_session_data__http {
 
 /* this protocol server (always the first one) just knows how to do HTTP */
 
-static int callback_http(struct libwebsocket_context *context,
-        struct libwebsocket *wsi,
-        enum libwebsocket_callback_reasons reason, void *user,
+static int callback_http(struct lws *wsi,
+        enum lws_callback_reasons reason, void *user,
                                void *in, size_t UNUSED(len))
 {
     char client_name[128];
@@ -114,7 +113,7 @@ static int callback_http(struct libwebsocket_context *context,
     int n, m;
     static unsigned char buffer[4096];
     struct per_session_data__http *pss = (struct per_session_data__http *)user;
-    struct libwebsocket_pollargs *pa = (struct libwebsocket_pollargs *) in;
+    struct lws_pollargs *pa = (struct lws_pollargs *)in;
 
     switch (reason) {
     case LWS_CALLBACK_HTTP:
@@ -122,9 +121,9 @@ static int callback_http(struct libwebsocket_context *context,
             if (in && strcmp((const char *)in, whitelist[n].urlpath) == 0)
                 break;
 
-        sprintf(buf, "%s%s", resource_path, whitelist[n].urlpath);
+        sprintf(buf, SERVER_CERT_DIR "%s", whitelist[n].urlpath);
 
-        if (libwebsockets_serve_http_file(context, wsi, buf, whitelist[n].mimetype, NULL, 0))
+        if (lws_serve_http_file(wsi, buf, whitelist[n].mimetype, NULL, 0))
             return -1; /* through completion or error, close the socket */
 
         /*
@@ -157,7 +156,7 @@ static int callback_http(struct libwebsocket_context *context,
              * because it's HTTP and not websocket, don't need to take
              * care about pre and postamble
              */
-            m = libwebsocket_write(wsi, buffer, n, LWS_WRITE_HTTP);
+            m = lws_write(wsi, buffer, n, LWS_WRITE_HTTP);
             if (m < 0)
                 /* write failed, close conn */
                 goto bail;
@@ -166,7 +165,7 @@ static int callback_http(struct libwebsocket_context *context,
                 lseek(pss->fd, m - n, SEEK_CUR);
 
         } while (!lws_send_pipe_choked(wsi));
-        libwebsocket_callback_on_writable(context, wsi);
+        lws_callback_on_writable(wsi);
         break;
 
 bail:
@@ -196,7 +195,7 @@ bail:
      */
 
     case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
-        libwebsockets_get_peer_addresses(context, wsi, (int)(long)in, client_name,
+        lws_get_peer_addresses(wsi, (int)(long)in, client_name,
                  sizeof(client_name), client_ip, sizeof(client_ip));
 
         //fprintf(stderr, "Received network connect from %s (%s)\n", client_name, client_ip);
@@ -240,9 +239,6 @@ bail:
 
     return 0;
 }
-
-
-/* dumb_increment protocol */
 
 /*
  * one of these is auto-created for each connection and a pointer to the
@@ -469,9 +465,8 @@ operation_failed:
     return -1;
 }
 
-static int callback_notification(struct libwebsocket_context *context,
-            struct libwebsocket *wsi,
-            enum libwebsocket_callback_reasons reason,
+static int callback_notification(struct lws *wsi,
+            enum lws_callback_reasons reason,
             void *user, void *in, size_t len)
 {
     int n = 0, m = 0, i;
@@ -509,6 +504,21 @@ static int callback_notification(struct libwebsocket_context *context,
         break;
     case LWS_CALLBACK_CLIENT_WRITEABLE:
         DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_WRITEABLE");
+        break;
+    case LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP:
+        DEBUG("ntf_prot clb LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP");
+        break;
+    case LWS_CALLBACK_CLOSED_CLIENT_HTTP:
+        DEBUG("ntf_prot clb LWS_CALLBACK_CLOSED_CLIENT_HTTP");
+        break;
+    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP:
+        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE_CLIENT_HTTP");
+        break;
+    case LWS_CALLBACK_COMPLETED_CLIENT_HTTP:
+        DEBUG("ntf_prot clb LWS_CALLBACK_COMPLETED_CLIENT_HTTP");
+        break;
+    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ:
+        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ");
         break;
     case LWS_CALLBACK_HTTP:
         DEBUG("ntf_prot clb LWS_CALLBACK_HTTP");
@@ -597,6 +607,24 @@ static int callback_notification(struct libwebsocket_context *context,
     case LWS_CALLBACK_USER:
         DEBUG("ntf_prot clb LWS_CALLBACK_USER");
         break;
+    case LWS_CALLBACK_WS_PEER_INITIATED_CLOSE:
+        DEBUG("ntf_prot clb LWS_CALLBACK_WS_PEER_INITIATED_CLOSE");
+        break;
+    case LWS_CALLBACK_WS_EXT_DEFAULTS:
+        DEBUG("ntf_prot clb LWS_CALLBACK_WS_EXT_DEFAULTS");
+        break;
+    case LWS_CALLBACK_CGI:
+        DEBUG("ntf_prot clb LWS_CALLBACK_CGI");
+        break;
+    case LWS_CALLBACK_CGI_TERMINATED:
+        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_TERMINATED");
+        break;
+    case LWS_CALLBACK_CGI_STDIN_DATA:
+        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_STDIN_DATA");
+        break;
+    case LWS_CALLBACK_CGI_STDIN_COMPLETED:
+        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_STDIN_COMPLETED");
+        break;
     }
 
     switch (reason) {
@@ -658,9 +686,9 @@ static int callback_notification(struct libwebsocket_context *context,
                 //n = sprintf((char *)p, "{\"eventtime\": \"%s\", \"content\": \"notification\"}", t);
                 n = sprintf((char *)p, "%s", msgtext);
                 DEBUG("ws send %dB in %lu", n, sizeof(buf));
-                m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+                m = lws_write(wsi, p, n, LWS_WRITE_TEXT);
                 if (lws_send_pipe_choked(wsi)) {
-                    libwebsocket_callback_on_writable(context, wsi);
+                    lws_callback_on_writable(wsi);
                     break;
                 }
 
@@ -780,31 +808,25 @@ static int callback_notification(struct libwebsocket_context *context,
 }
 
 /* list of supported protocols and callbacks */
-
-static struct libwebsocket_protocols protocols[] = {
+static struct lws_protocols protocols[] = {
     /* first protocol must always be HTTP handler */
-
     {
         "http-only",        /* name */
         callback_http,      /* callback */
-        sizeof (struct per_session_data__http), /* per_session_data_size */
-        0,          /* max frame size / rx buffer */
-        0,
-        NULL,
-        NULL,
-        0
+        sizeof(struct per_session_data__http), /* per_session_data_size */
+        0,                   /* max frame size / rx buffer */
+        1,
+        NULL
     },
     {
         "notification-protocol",
         callback_notification,
         sizeof(struct per_session_data__notif_client),
         4000,
-        0,
-        NULL,
-        NULL,
-        0
+        2,
+        NULL
     },
-    { NULL, NULL, 0, 0, 0, NULL, NULL, 0 } /* terminator */
+    { NULL, NULL, 0, 0, 0, NULL } /* terminator */
 };
 
 /**
@@ -812,13 +834,8 @@ static struct libwebsocket_protocols protocols[] = {
  */
 int notification_init(void)
 {
-    //char cert_path[1024];
-    //char key_path[1024];
-    //int use_ssl = 0;
+    char cert_path[1024], key_path[1024];
     struct lws_context_creation_info info;
-    int opts = 0;
-    //char interface_name[128] = "";
-    const char *iface = NULL;
     int debug_level = 7;
 
     memset(&info, 0, sizeof info);
@@ -828,9 +845,6 @@ int notification_init(void)
     lws_set_log_level(debug_level, lwsl_emit_syslog);
 
     DEBUG("Initialization of libwebsocket");
-    //lwsl_notice("libwebsockets test server - "
-    //      "(C) Copyright 2010-2013 Andy Green <andy@warmcat.com> - "
-    //                      "licensed under LGPL2.1\n");
     max_poll_elements = getdtablesize();
     pollfds = malloc(max_poll_elements * sizeof (struct pollfd));
     fd_lookup = malloc(max_poll_elements * sizeof (int));
@@ -839,21 +853,21 @@ int notification_init(void)
         return -1;
     }
 
-    info.iface = iface;
+    info.iface = NULL;
     info.protocols = protocols;
 
-    //snprintf(cert_path, sizeof(cert_path), "%s/libwebsockets-test-server.pem", resource_path);
-    //snprintf(key_path, sizeof(cert_path), "%s/libwebsockets-test-server.key.pem", resource_path);
+    snprintf(cert_path, sizeof(cert_path), SERVER_CERT_DIR "/" SERVER_CERT);
+    snprintf(key_path, sizeof(key_path), SERVER_CERT_DIR "/" SERVER_KEY);
 
-    //info.ssl_cert_filepath = cert_path;
-    //info.ssl_private_key_filepath = key_path;
+    info.ssl_cert_filepath = cert_path;
+    info.ssl_private_key_filepath = key_path;
 
     info.gid = -1;
     info.uid = -1;
-    info.options = opts;
+    info.options = LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT | LWS_SERVER_OPTION_REDIRECT_HTTP_TO_HTTPS;
 
     /* create server */
-    context = libwebsocket_create_context(&info);
+    context = lws_create_context(&info);
     if (context == NULL) {
         DEBUG("libwebsocket init failed.");
         return -1;
@@ -868,7 +882,7 @@ int notification_init(void)
 void notification_close(void)
 {
     if (context) {
-        libwebsocket_context_destroy(context);
+        lws_context_destroy(context);
     }
     free(pollfds);
     free(fd_lookup);
@@ -896,10 +910,9 @@ int notification_handle()
      */
 
     if (((unsigned int)tv.tv_sec - olds) > 0) {
-        libwebsocket_callback_on_writable_all_protocol(&protocols[PROTOCOL_NOTIFICATION]);
+        lws_callback_on_writable_all_protocol(context, &protocols[PROTOCOL_NOTIFICATION]);
         olds = tv.tv_sec;
     }
-
 
     /*
      * this represents an existing server's single poll action
@@ -907,9 +920,9 @@ int notification_handle()
      */
 
     n = poll(pollfds, count_pollfds, 50);
-    if (n < 0)
+    if (n < 0) {
         return n;
-
+    }
 
     if (n) {
         for (n = 0; n < count_pollfds; n++) {
@@ -919,7 +932,7 @@ int notification_handle()
                  * match anything under libwebsockets
                  * control
                  */
-                if (libwebsocket_service_fd(context, &pollfds[n]) < 0) {
+                if (lws_service_fd(context, &pollfds[n]) < 0) {
                     return 1;
                 }
             }
