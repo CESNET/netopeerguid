@@ -1985,12 +1985,14 @@ children:
 }
 
 static json_object *
-libyang_query(unsigned int session_key, const char *filter, int load_children)
+libyang_query(unsigned int session_key, json_object *filter_array, int load_children)
 {
+    int i;
+    const char *filter;
     const struct lys_node *node;
     const struct lys_module *module = NULL;
     struct session_with_mutex *locked_session;
-    json_object *ret = NULL, *data;
+    json_object *ret = NULL, *data = NULL, *obj;
 
     locked_session = session_get_locked(session_key, &ret);
     if (!locked_session) {
@@ -2000,43 +2002,53 @@ libyang_query(unsigned int session_key, const char *filter, int load_children)
 
     session_user_activity(nc_session_get_username(locked_session->session));
 
-    if (filter[0] == '/') {
-        node = ly_ctx_get_node(nc_session_get_ctx(locked_session->session), NULL, filter);
-        if (!node) {
-            ret = create_error_reply("Failed to resolve XPath filter node.");
-            goto finish;
-        }
-    } else {
-        module = ly_ctx_get_module(nc_session_get_ctx(locked_session->session), filter, NULL);
-        if (!module) {
-            ret = create_error_reply("Failed to find model.");
-            goto finish;
-        }
-    }
+    for (i = 0; i < json_object_array_length(filter_array); ++i) {
+        obj = json_object_array_get_idx(filter_array, i);
+        filter = json_object_get_string(obj);
 
-    pthread_mutex_lock(&json_lock);
-    data = json_object_new_object();
-
-    if (module) {
-        node_add_model_metadata(module, data);
-        if (load_children) {
-            LY_TREE_FOR(module->data, node) {
-                node_add_children_with_metadata_recursive(node, NULL, data);
+        if (filter[0] == '/') {
+            node = ly_ctx_get_node(nc_session_get_ctx(locked_session->session), NULL, filter);
+            if (!node) {
+                ret = create_error_reply("Failed to resolve XPath filter node.");
+                goto finish;
+            }
+        } else {
+            module = ly_ctx_get_module(nc_session_get_ctx(locked_session->session), filter, NULL);
+            if (!module) {
+                ret = create_error_reply("Failed to find model.");
+                goto finish;
             }
         }
-    } else {
-        if (load_children) {
-            node_add_children_with_metadata_recursive(node, NULL, data);
-        } else {
-            node_add_metadata(node, NULL, data);
+
+        pthread_mutex_lock(&json_lock);
+        if (!data) {
+            data = json_object_new_object();
         }
+
+        if (module) {
+            node_add_model_metadata(module, data);
+            if (load_children) {
+                LY_TREE_FOR(module->data, node) {
+                    node_add_children_with_metadata_recursive(node, NULL, data);
+                }
+            }
+        } else {
+            if (load_children) {
+                node_add_children_with_metadata_recursive(node, NULL, data);
+            } else {
+                node_add_metadata(node, NULL, data);
+            }
+        }
+
+        pthread_mutex_unlock(&json_lock);
     }
 
-    pthread_mutex_unlock(&json_lock);
     ret = create_data_reply(json_object_to_json_string(data));
     json_object_put(data);
+    data = NULL;
 
 finish:
+    json_object_put(data);
     session_unlock(locked_session);
     return ret;
 }
@@ -3213,8 +3225,7 @@ finalize:
 json_object *
 handle_op_query(json_object *request, unsigned int session_key, int idx)
 {
-    json_object *reply = NULL, *filters, *obj;
-    char *filter = NULL;
+    json_object *reply = NULL, *filters, *obj, *filter_array;
     int load_children = 0;
 
     DEBUG("Request: query (session %u)", session_key);
@@ -3225,19 +3236,18 @@ handle_op_query(json_object *request, unsigned int session_key, int idx)
         reply = create_error_reply("Missing filters parameter.");
         goto finalize;
     }
-    obj = json_object_array_get_idx(filters, idx);
-    if (!obj) {
+    filter_array = json_object_array_get_idx(filters, idx);
+    if (!filter_array || (json_object_get_type(filter_array) != json_type_array)) {
         pthread_mutex_unlock(&json_lock);
-        reply = create_error_reply("Filters array parameter shorter than sessions.");
+        reply = create_error_reply("Filters array parameter wrong.");
         goto finalize;
     }
-    filter = strdup(json_object_get_string(obj));
     if (json_object_object_get_ex(request, "load_children", &obj) == TRUE) {
         load_children = json_object_get_boolean(obj);
     }
     pthread_mutex_unlock(&json_lock);
 
-    reply = libyang_query(session_key, filter, load_children);
+    reply = libyang_query(session_key, filter_array, load_children);
 
     CHECK_ERR_SET_REPLY
     if (!reply) {
@@ -3245,7 +3255,6 @@ handle_op_query(json_object *request, unsigned int session_key, int idx)
     }
 
 finalize:
-    CHECK_AND_FREE(filter);
     return reply;
 }
 

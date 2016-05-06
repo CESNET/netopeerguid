@@ -280,7 +280,7 @@ Required when target is "url":
 
 * key: type (int), value: 100
 * key: sessions (array of ints), value: array of SIDs
-* key: filters (array of strings with same index order as sessions), value: array of XPath (with "prefix" = module name) values of target node in schema (start with '/') or module names (do not start with '/')
+* key: filters (array of arrays of strings with same index order as sessions), value: array of XPath arrays (with "prefix" = module name) values of target node in schema (start with '/') or module names (do not start with '/')
 
 In module query, the top-nodes array includes only nodes that can appear in data or some descendant can (container, choice, leaf, leaflist, list, anyxml). The rpcs array contains all RPCs defined in the module.
 
