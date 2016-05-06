@@ -14,7 +14,7 @@ wget --no-check-certificate https://red.libssh.org/attachments/download/195/libs
 )
 
 (
-git clone git://github.com/cejkato2/libwebsockets lws && mkdir lws/b && cd lws/b && cmake .. && sudo make install
+git clone -b v2.0-stable https://github.com/warmcat/libwebsockets lws && mkdir lws/build && cd lws/build && cmake .. && sudo make install
 )
 
 (
