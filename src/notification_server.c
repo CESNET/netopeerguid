@@ -51,27 +51,10 @@ static struct lws_context *context = NULL;
 extern struct session_with_mutex *netconf_sessions_list;
 static pthread_key_t thread_key;
 
-/*
- * This demo server shows how to use libwebsockets for one or more
- * websocket protocols in the same server
- *
- * It defines the following websocket protocols:
- *
- *  dumb-increment-protocol:  once the socket is opened, an incrementing
- *              ascii string is sent down it every 50ms.
- *              If you send "reset\n" on the websocket, then
- *              the incrementing number is reset to 0.
- *
- *  lws-mirror-protocol: copies any received packet to every connection also
- *              using this protocol, including the sender
- */
-
 enum demo_protocols {
     /* always first */
     PROTOCOL_HTTP = 0,
-
     PROTOCOL_NOTIFICATION,
-
     /* always last */
     DEMO_PROTOCOL_COUNT
 };
@@ -101,11 +84,165 @@ struct per_session_data__http {
     int fd;
 };
 
-/* this protocol server (always the first one) just knows how to do HTTP */
+static void
+debug_print_clb(const char *func, enum lws_callback_reasons reason)
+{
+    switch (reason) {
+    case LWS_CALLBACK_ESTABLISHED:
+        DEBUG("%s: LWS_CALLBACK_ESTABLISHED", func);
+        break;
+    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_CONNECTION_ERROR", func);
+        break;
+    case LWS_CALLBACK_CLIENT_FILTER_PRE_ESTABLISH:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_FILTER_PRE_ESTABLISH", func);
+        break;
+    case LWS_CALLBACK_CLIENT_ESTABLISHED:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_ESTABLISHED", func);
+        break;
+    case LWS_CALLBACK_CLOSED:
+        DEBUG("%s: LWS_CALLBACK_CLOSED", func);
+        break;
+    case LWS_CALLBACK_RECEIVE:
+        DEBUG("%s: LWS_CALLBACK_RECEIVE", func);
+        break;
+    case LWS_CALLBACK_RECEIVE_PONG:
+        DEBUG("%s: LWS_CALLBACK_RECEIVE_PONG", func);
+        break;
+    case LWS_CALLBACK_CLIENT_RECEIVE_PONG:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_RECEIVE_PONG", func);
+        break;
+    case LWS_CALLBACK_CLIENT_RECEIVE:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_RECEIVE", func);
+        break;
+    case LWS_CALLBACK_CLIENT_WRITEABLE:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_WRITEABLE", func);
+        break;
+    case LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP:
+        DEBUG("%s: LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP", func);
+        break;
+    case LWS_CALLBACK_CLOSED_CLIENT_HTTP:
+        DEBUG("%s: LWS_CALLBACK_CLOSED_CLIENT_HTTP", func);
+        break;
+    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP:
+        DEBUG("%s: LWS_CALLBACK_RECEIVE_CLIENT_HTTP", func);
+        break;
+    case LWS_CALLBACK_COMPLETED_CLIENT_HTTP:
+        DEBUG("%s: LWS_CALLBACK_COMPLETED_CLIENT_HTTP", func);
+        break;
+    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ:
+        DEBUG("%s: LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ", func);
+        break;
+    case LWS_CALLBACK_HTTP:
+        DEBUG("%s: LWS_CALLBACK_HTTP", func);
+        break;
+    case LWS_CALLBACK_HTTP_BODY:
+        DEBUG("%s: LWS_CALLBACK_HTTP_BODY", func);
+        break;
+    case LWS_CALLBACK_HTTP_BODY_COMPLETION:
+        DEBUG("%s: LWS_CALLBACK_HTTP_BODY_COMPLETION", func);
+        break;
+    case LWS_CALLBACK_FILTER_HTTP_CONNECTION:
+        DEBUG("%s: LWS_CALLBACK_FILTER_HTTP_CONNECTION", func);
+        break;
+    case LWS_CALLBACK_CLOSED_HTTP:
+        DEBUG("%s: LWS_CALLBACK_CLOSED_HTTP", func);
+        break;
+    case LWS_CALLBACK_HTTP_WRITEABLE:
+        DEBUG("%s: LWS_CALLBACK_HTTP_WRITEABLE", func);
+        break;
+    case LWS_CALLBACK_HTTP_FILE_COMPLETION:
+        DEBUG("%s: LWS_CALLBACK_HTTP_FILE_COMPLETION", func);
+        break;
+    case LWS_CALLBACK_SERVER_WRITEABLE:
+        DEBUG("%s: LWS_CALLBACK_SERVER_WRITEABLE", func);
+        break;
+    case LWS_CALLBACK_SERVER_NEW_CLIENT_INSTANTIATED:
+        DEBUG("%s: LWS_CALLBACK_SERVER_NEW_CLIENT_INSTANTIATED", func);
+        break;
+    case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
+        DEBUG("%s: LWS_CALLBACK_FILTER_NETWORK_CONNECTION", func);
+        break;
+    case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
+        DEBUG("%s: LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION", func);
+        break;
+    case LWS_CALLBACK_WSI_CREATE:
+        DEBUG("%s: LWS_CALLBACK_WSI_CREATE", func);
+        break;
+    case LWS_CALLBACK_WSI_DESTROY:
+        DEBUG("%s: LWS_CALLBACK_WSI_DESTROY", func);
+        break;
+    case LWS_CALLBACK_GET_THREAD_ID:
+        DEBUG("%s: LWS_CALLBACK_GET_THREAD_ID", func);
+        break;
+    case LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERTS:
+        DEBUG("%s: LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERTS", func);
+        break;
+    case LWS_CALLBACK_OPENSSL_LOAD_EXTRA_SERVER_VERIFY_CERTS:
+        DEBUG("%s: LWS_CALLBACK_OPENSSL_LOAD_EXTRA_SERVER_VERIFY_CERTS", func);
+        break;
+    case LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION:
+        DEBUG("%s: LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION", func);
+        break;
+    case LWS_CALLBACK_OPENSSL_CONTEXT_REQUIRES_PRIVATE_KEY:
+        DEBUG("%s: LWS_CALLBACK_OPENSSL_CONTEXT_REQUIRES_PRIVATE_KEY", func);
+        break;
+    case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER", func);
+        break;
+    case LWS_CALLBACK_CONFIRM_EXTENSION_OKAY:
+        DEBUG("%s: LWS_CALLBACK_CONFIRM_EXTENSION_OKAY", func);
+        break;
+    case LWS_CALLBACK_CLIENT_CONFIRM_EXTENSION_SUPPORTED:
+        DEBUG("%s: LWS_CALLBACK_CLIENT_CONFIRM_EXTENSION_SUPPORTED", func);
+        break;
+    case LWS_CALLBACK_PROTOCOL_INIT:
+        DEBUG("%s: LWS_CALLBACK_PROTOCOL_INIT", func);
+        break;
+    case LWS_CALLBACK_PROTOCOL_DESTROY:
+        DEBUG("%s: LWS_CALLBACK_PROTOCOL_DESTROY", func);
+        break;
+    case LWS_CALLBACK_ADD_POLL_FD:
+        DEBUG("%s: LWS_CALLBACK_ADD_POLL_FD", func);
+        break;
+    case LWS_CALLBACK_DEL_POLL_FD:
+        DEBUG("%s: LWS_CALLBACK_DEL_POLL_FD", func);
+        break;
+    case LWS_CALLBACK_CHANGE_MODE_POLL_FD:
+        DEBUG("%s: LWS_CALLBACK_CHANGE_MODE_POLL_FD", func);
+        break;
+    case LWS_CALLBACK_LOCK_POLL:
+        DEBUG("%s: LWS_CALLBACK_LOCK_POLL", func);
+        break;
+    case LWS_CALLBACK_UNLOCK_POLL:
+        DEBUG("%s: LWS_CALLBACK_UNLOCK_POLL", func);
+        break;
+    case LWS_CALLBACK_USER:
+        DEBUG("%s: LWS_CALLBACK_USER", func);
+        break;
+    case LWS_CALLBACK_WS_PEER_INITIATED_CLOSE:
+        DEBUG("%s: LWS_CALLBACK_WS_PEER_INITIATED_CLOSE", func);
+        break;
+    case LWS_CALLBACK_WS_EXT_DEFAULTS:
+        DEBUG("%s: LWS_CALLBACK_WS_EXT_DEFAULTS", func);
+        break;
+    case LWS_CALLBACK_CGI:
+        DEBUG("%s: LWS_CALLBACK_CGI", func);
+        break;
+    case LWS_CALLBACK_CGI_TERMINATED:
+        DEBUG("%s: LWS_CALLBACK_CGI_TERMINATED", func);
+        break;
+    case LWS_CALLBACK_CGI_STDIN_DATA:
+        DEBUG("%s: LWS_CALLBACK_CGI_STDIN_DATA", func);
+        break;
+    case LWS_CALLBACK_CGI_STDIN_COMPLETED:
+        DEBUG("%s: LWS_CALLBACK_CGI_STDIN_COMPLETED", func);
+        break;
+    }
+}
 
-static int callback_http(struct lws *wsi,
-        enum lws_callback_reasons reason, void *user,
-                               void *in, size_t UNUSED(len))
+static int
+callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t UNUSED(len))
 {
     char client_name[128];
     char client_ip[128];
@@ -114,6 +251,8 @@ static int callback_http(struct lws *wsi,
     static unsigned char buffer[4096];
     struct per_session_data__http *pss = (struct per_session_data__http *)user;
     struct lws_pollargs *pa = (struct lws_pollargs *)in;
+
+    debug_print_clb(__func__, reason);
 
     switch (reason) {
     case LWS_CALLBACK_HTTP:
@@ -254,12 +393,15 @@ struct per_session_data__notif_client {
     struct nc_session *session;
 };
 
-struct session_with_mutex *get_ncsession_from_sid(const char *session_id)
+static struct session_with_mutex *
+get_ncsession_from_sid(const char *session_id)
 {
     struct session_with_mutex *locked_session = NULL;
+
     if (session_id == NULL) {
         return (NULL);
     }
+
     for (locked_session = netconf_sessions_list;
          locked_session && (nc_session_get_id(locked_session->session) == (unsigned)atoi(session_id));
          locked_session = locked_session->next);
@@ -465,167 +607,15 @@ operation_failed:
     return -1;
 }
 
-static int callback_notification(struct lws *wsi,
-            enum lws_callback_reasons reason,
-            void *user, void *in, size_t len)
+static int
+callback_notification(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len)
 {
     int n = 0, m = 0, i;
     unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 40960 + LWS_SEND_BUFFER_POST_PADDING];
     unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
     struct per_session_data__notif_client *pss = (struct per_session_data__notif_client *)user;
 
-    switch (reason) {
-    case LWS_CALLBACK_ESTABLISHED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_ESTABLISHED");
-        break;
-    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_CONNECTION_ERROR");
-        break;
-    case LWS_CALLBACK_CLIENT_FILTER_PRE_ESTABLISH:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_FILTER_PRE_ESTABLISH");
-        break;
-    case LWS_CALLBACK_CLIENT_ESTABLISHED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_ESTABLISHED");
-        break;
-    case LWS_CALLBACK_CLOSED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLOSED");
-        break;
-    case LWS_CALLBACK_RECEIVE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE");
-        break;
-    case LWS_CALLBACK_RECEIVE_PONG:
-        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE_PONG");
-        break;
-    case LWS_CALLBACK_CLIENT_RECEIVE_PONG:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_RECEIVE_PONG");
-        break;
-    case LWS_CALLBACK_CLIENT_RECEIVE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_RECEIVE");
-        break;
-    case LWS_CALLBACK_CLIENT_WRITEABLE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_WRITEABLE");
-        break;
-    case LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP");
-        break;
-    case LWS_CALLBACK_CLOSED_CLIENT_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLOSED_CLIENT_HTTP");
-        break;
-    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE_CLIENT_HTTP");
-        break;
-    case LWS_CALLBACK_COMPLETED_CLIENT_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_COMPLETED_CLIENT_HTTP");
-        break;
-    case LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ:
-        DEBUG("ntf_prot clb LWS_CALLBACK_RECEIVE_CLIENT_HTTP_READ");
-        break;
-    case LWS_CALLBACK_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_HTTP");
-        break;
-    case LWS_CALLBACK_HTTP_BODY:
-        DEBUG("ntf_prot clb LWS_CALLBACK_HTTP_BODY");
-        break;
-    case LWS_CALLBACK_HTTP_BODY_COMPLETION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_HTTP_BODY_COMPLETION");
-        break;
-    case LWS_CALLBACK_FILTER_HTTP_CONNECTION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_FILTER_HTTP_CONNECTION");
-        break;
-    case LWS_CALLBACK_CLOSED_HTTP:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLOSED_HTTP");
-        break;
-    case LWS_CALLBACK_HTTP_WRITEABLE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_HTTP_WRITEABLE");
-        break;
-    case LWS_CALLBACK_HTTP_FILE_COMPLETION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_HTTP_FILE_COMPLETION");
-        break;
-    case LWS_CALLBACK_SERVER_WRITEABLE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_SERVER_WRITEABLE");
-        break;
-    case LWS_CALLBACK_SERVER_NEW_CLIENT_INSTANTIATED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_SERVER_NEW_CLIENT_INSTANTIATED");
-        break;
-    case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_FILTER_NETWORK_CONNECTION");
-        break;
-    case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION");
-        break;
-    case LWS_CALLBACK_WSI_CREATE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_WSI_CREATE");
-        break;
-    case LWS_CALLBACK_WSI_DESTROY:
-        DEBUG("ntf_prot clb LWS_CALLBACK_WSI_DESTROY");
-        break;
-    case LWS_CALLBACK_GET_THREAD_ID:
-        DEBUG("ntf_prot clb LWS_CALLBACK_GET_THREAD_ID");
-        break;
-    case LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERTS:
-        DEBUG("ntf_prot clb LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERTS");
-        break;
-    case LWS_CALLBACK_OPENSSL_LOAD_EXTRA_SERVER_VERIFY_CERTS:
-        DEBUG("ntf_prot clb LWS_CALLBACK_OPENSSL_LOAD_EXTRA_SERVER_VERIFY_CERTS");
-        break;
-    case LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION:
-        DEBUG("ntf_prot clb LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION");
-        break;
-    case LWS_CALLBACK_OPENSSL_CONTEXT_REQUIRES_PRIVATE_KEY:
-        DEBUG("ntf_prot clb LWS_CALLBACK_OPENSSL_CONTEXT_REQUIRES_PRIVATE_KEY");
-        break;
-    case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER");
-        break;
-    case LWS_CALLBACK_CONFIRM_EXTENSION_OKAY:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CONFIRM_EXTENSION_OKAY");
-        break;
-    case LWS_CALLBACK_CLIENT_CONFIRM_EXTENSION_SUPPORTED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CLIENT_CONFIRM_EXTENSION_SUPPORTED");
-        break;
-    case LWS_CALLBACK_PROTOCOL_INIT:
-        DEBUG("ntf_prot clb LWS_CALLBACK_PROTOCOL_INIT");
-        break;
-    case LWS_CALLBACK_PROTOCOL_DESTROY:
-        DEBUG("ntf_prot clb LWS_CALLBACK_PROTOCOL_DESTROY");
-        break;
-    case LWS_CALLBACK_ADD_POLL_FD:
-        DEBUG("ntf_prot clb LWS_CALLBACK_ADD_POLL_FD");
-        break;
-    case LWS_CALLBACK_DEL_POLL_FD:
-        DEBUG("ntf_prot clb LWS_CALLBACK_DEL_POLL_FD");
-        break;
-    case LWS_CALLBACK_CHANGE_MODE_POLL_FD:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CHANGE_MODE_POLL_FD");
-        break;
-    case LWS_CALLBACK_LOCK_POLL:
-        DEBUG("ntf_prot clb LWS_CALLBACK_LOCK_POLL");
-        break;
-    case LWS_CALLBACK_UNLOCK_POLL:
-        DEBUG("ntf_prot clb LWS_CALLBACK_UNLOCK_POLL");
-        break;
-    case LWS_CALLBACK_USER:
-        DEBUG("ntf_prot clb LWS_CALLBACK_USER");
-        break;
-    case LWS_CALLBACK_WS_PEER_INITIATED_CLOSE:
-        DEBUG("ntf_prot clb LWS_CALLBACK_WS_PEER_INITIATED_CLOSE");
-        break;
-    case LWS_CALLBACK_WS_EXT_DEFAULTS:
-        DEBUG("ntf_prot clb LWS_CALLBACK_WS_EXT_DEFAULTS");
-        break;
-    case LWS_CALLBACK_CGI:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CGI");
-        break;
-    case LWS_CALLBACK_CGI_TERMINATED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_TERMINATED");
-        break;
-    case LWS_CALLBACK_CGI_STDIN_DATA:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_STDIN_DATA");
-        break;
-    case LWS_CALLBACK_CGI_STDIN_COMPLETED:
-        DEBUG("ntf_prot clb LWS_CALLBACK_CGI_STDIN_COMPLETED");
-        break;
-    }
+    debug_print_clb(__func__, reason);
 
     switch (reason) {
     case LWS_CALLBACK_ESTABLISHED:
@@ -807,7 +797,6 @@ static int callback_notification(struct lws *wsi,
     return 0;
 }
 
-/* list of supported protocols and callbacks */
 static struct lws_protocols protocols[] = {
     /* first protocol must always be HTTP handler */
     {
@@ -832,7 +821,8 @@ static struct lws_protocols protocols[] = {
 /**
  * initialization of notification module
  */
-int notification_init(void)
+int
+notification_init(void)
 {
     char cert_path[1024], key_path[1024];
     struct lws_context_creation_info info;
@@ -879,7 +869,8 @@ int notification_init(void)
     return 0;
 }
 
-void notification_close(void)
+void
+notification_close(void)
 {
     if (context) {
         lws_context_destroy(context);
@@ -895,7 +886,8 @@ void notification_close(void)
  * \brief send notification if any
  * \return < 0 on error
  */
-int notification_handle()
+int
+notification_handle()
 {
     static struct timeval tv;
     static unsigned int olds = 0;
@@ -946,7 +938,8 @@ int notification_handle()
 
 #ifndef WITH_NOTIFICATIONS
 #ifdef TEST_NOTIFICATION_SERVER
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
     if (notification_init(NULL, NULL) == -1) {
         fprintf(stderr, "Error during initialization\n");
