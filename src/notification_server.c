@@ -918,7 +918,7 @@ notification_handle()
 
     if (n) {
         for (n = 0; n < count_pollfds; n++) {
-            if (pollfds[n].revents) {
+            if (pollfds[n].revents & (POLLIN | POLLOUT)) {
                 /*
                  * returns immediately if the fd does not
                  * match anything under libwebsockets
