@@ -3870,7 +3870,6 @@ int
 main(int argc, char **argv)
 {
     struct sigaction action;
-    sigset_t block_mask;
     int i;
 
     if (argc > 3) {
@@ -3898,15 +3897,13 @@ main(int argc, char **argv)
         openlog("netopeerguid", LOG_PID, LOG_DAEMON);
     }
 
-    sigfillset(&block_mask);
     action.sa_handler = signal_handler;
-    action.sa_mask = block_mask;
+    sigemptyset(&action.sa_mask);
     action.sa_flags = 0;
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
-    sigemptyset(&block_mask);
+
     action.sa_handler = SIG_IGN;
-    action.sa_mask = block_mask;
     sigaction(SIGPIPE, &action, NULL);
 
     forked_proc();
