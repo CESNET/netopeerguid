@@ -918,7 +918,10 @@ notification_handle()
 
     if (n) {
         for (n = 0; n < count_pollfds; n++) {
-            if (pollfds[n].revents & (POLLIN | POLLOUT)) {
+            if (pollfds[n].revents & (POLLHUP | POLLERR)) {
+                ERROR("notifications: poll pipe closed or error");
+                return -1;
+            } else if (pollfds[n].revents & (POLLIN | POLLOUT)) {
                 /*
                  * returns immediately if the fd does not
                  * match anything under libwebsockets
