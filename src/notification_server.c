@@ -854,7 +854,7 @@ notification_init(void)
 
     info.gid = -1;
     info.uid = -1;
-    info.options = LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT | LWS_SERVER_OPTION_REDIRECT_HTTP_TO_HTTPS;
+    info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT | LWS_SERVER_OPTION_REDIRECT_HTTP_TO_HTTPS;
 
     /* create server */
     context = lws_create_context(&info);
