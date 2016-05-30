@@ -599,7 +599,6 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
     DEBUG("Create notification_thread.");
     nc_recv_notif_dispatch(session, notification_fileprint);
-    DEBUG("Subscription finished.");
     return 0;
 
 operation_failed:
@@ -918,8 +917,11 @@ notification_handle()
 
     if (n) {
         for (n = 0; n < count_pollfds; n++) {
-            if (pollfds[n].revents & (POLLHUP | POLLERR)) {
-                ERROR("notifications: poll pipe closed or error");
+            if (pollfds[n].revents & POLLHUP) {
+                ERROR("notifications: poll pipe closed");
+                return -1;
+            } else if (pollfds[n].revents & POLLERR) {
+                ERROR("notifications: poll pipe error");
                 return -1;
             } else if (pollfds[n].revents & (POLLIN | POLLOUT)) {
                 /*
