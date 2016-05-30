@@ -3904,8 +3904,9 @@ main(int argc, char **argv)
     action.sa_flags = 0;
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
+    sigemptyset(&block_mask);
     action.sa_handler = SIG_IGN;
-    action.sa_mask = 0;
+    action.sa_mask = block_mask;
     sigaction(SIGPIPE, &action, NULL);
 
     forked_proc();
