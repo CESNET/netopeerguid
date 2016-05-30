@@ -890,7 +890,7 @@ notification_handle()
 {
     static struct timeval tv;
     static unsigned int olds = 0;
-    int n = 0;
+    int n = 0, fd_pos;
 
     gettimeofday(&tv, NULL);
 
@@ -920,17 +920,17 @@ notification_handle()
             if (pollfds[n].revents & POLLHUP) {
                 ERROR("notifications: poll pipe closed");
                 if (--count_pollfds) {
-                    m = fd_lookup[pa->fd];
-                    pollfds[m] = pollfds[count_pollfds];
-                    fd_lookup[pollfds[count_pollfds].fd] = m;
+                    fd_pos = fd_lookup[pollfds[n].fd];
+                    pollfds[fd_pos] = pollfds[count_pollfds];
+                    fd_lookup[pollfds[count_pollfds].fd] = fd_pos;
                 }
                 return -1;
             } else if (pollfds[n].revents & POLLERR) {
                 ERROR("notifications: poll pipe error");
                 if (--count_pollfds) {
-                    m = fd_lookup[pa->fd];
-                    pollfds[m] = pollfds[count_pollfds];
-                    fd_lookup[pollfds[count_pollfds].fd] = m;
+                    fd_pos = fd_lookup[pollfds[n].fd];
+                    pollfds[fd_pos] = pollfds[count_pollfds];
+                    fd_lookup[pollfds[count_pollfds].fd] = fd_pos;
                 }
                 return -1;
             } else if (pollfds[n].revents & (POLLIN | POLLOUT)) {
