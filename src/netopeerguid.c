@@ -3904,6 +3904,9 @@ main(int argc, char **argv)
     action.sa_flags = 0;
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
+    action.sa_handler = SIG_IGN;
+    action.sa_mask = 0;
+    sigaction(SIGPIPE, &action, NULL);
 
     forked_proc();
     DEBUG("Terminated");
