@@ -919,9 +919,19 @@ notification_handle()
         for (n = 0; n < count_pollfds; n++) {
             if (pollfds[n].revents & POLLHUP) {
                 ERROR("notifications: poll pipe closed");
+                if (--count_pollfds) {
+                    m = fd_lookup[pa->fd];
+                    pollfds[m] = pollfds[count_pollfds];
+                    fd_lookup[pollfds[count_pollfds].fd] = m;
+                }
                 return -1;
             } else if (pollfds[n].revents & POLLERR) {
                 ERROR("notifications: poll pipe error");
+                if (--count_pollfds) {
+                    m = fd_lookup[pa->fd];
+                    pollfds[m] = pollfds[count_pollfds];
+                    fd_lookup[pollfds[count_pollfds].fd] = m;
+                }
                 return -1;
             } else if (pollfds[n].revents & (POLLIN | POLLOUT)) {
                 /*
