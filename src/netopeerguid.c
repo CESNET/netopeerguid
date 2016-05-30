@@ -3112,7 +3112,7 @@ handle_op_ntfgethistory(json_object *request, unsigned int session_key)
         DEBUG("creating temporal NC session.");
         temp_session = nc_connect_ssh_channel(locked_session->session, NULL);
         if (temp_session != NULL) {
-            rpc = nc_rpc_subscribe(NULL, NULL, nc_time2datetime(start, NULL), nc_time2datetime(stop, NULL), NC_PARAMTYPE_CONST);
+            rpc = nc_rpc_subscribe(NULL, NULL, nc_time2datetime(start, NULL, NULL), nc_time2datetime(stop, NULL, NULL), NC_PARAMTYPE_CONST);
             if (rpc == NULL) {
                 DEBUG("UNLOCK mutex %s", __func__);
                 pthread_mutex_unlock(&locked_session->lock);

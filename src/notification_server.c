@@ -564,8 +564,8 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
     DEBUG("Prepare to execute subscription.");
     /* create requests */
-    rpc = nc_rpc_subscribe(stream, NULL, (start_time == -1) ? NULL : nc_time2datetime(start, NULL),
-                           (stop_time == 0) ? NULL : nc_time2datetime(stop, NULL), NC_PARAMTYPE_CONST);
+    rpc = nc_rpc_subscribe(stream, NULL, (start_time == -1) ? NULL : nc_time2datetime(start, NULL, NULL),
+                           (stop_time == 0) ? NULL : nc_time2datetime(stop, NULL, NULL), NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("notifications: creating an rpc request failed.");
         goto operation_failed;
