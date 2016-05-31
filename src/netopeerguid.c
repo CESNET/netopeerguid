@@ -1189,7 +1189,6 @@ netconf_connect(const char *host, const char *port, const char *user, const char
             ERROR("Error while locking rwlock: %d (%s)", errno, strerror(errno));
             return 0;
         }
-        locked_session->ntfc_subscribed = 0;
         DEBUG("Add connection to the list");
         if (!netconf_sessions_list) {
             netconf_sessions_list = locked_session;
@@ -1235,7 +1234,6 @@ close_and_free_session(struct session_with_mutex *locked_session)
     if (pthread_mutex_lock(&locked_session->lock) != 0) {
         ERROR("Error while locking rwlock");
     }
-    locked_session->ntfc_subscribed = 0;
     locked_session->closed = 1;
     if (locked_session->session != NULL) {
         nc_session_free(locked_session->session, NULL);

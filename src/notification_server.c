@@ -409,7 +409,8 @@ get_ncsession_from_sid(const char *session_id)
 }
 
 /* rpc parameter is freed after the function call */
-static int send_recv_process(struct nc_session *session, const char* UNUSED(operation), struct nc_rpc* rpc)
+static int
+send_recv_process(struct nc_session *session, const char* UNUSED(operation), struct nc_rpc* rpc)
 {
     struct nc_reply *reply = NULL;
     char *data = NULL;
@@ -466,7 +467,8 @@ static int send_recv_process(struct nc_session *session, const char* UNUSED(oper
  * \param [in] eventtime - time when notification occured
  * \param [in] content - content of notification
  */
-static void notification_fileprint(struct nc_session *session, const struct nc_notif *notif)
+static void
+notification_fileprint(struct nc_session *session, const struct nc_notif *notif)
 {
     time_t eventtime;
     struct session_with_mutex *target_session = NULL;
@@ -527,7 +529,8 @@ unlock_glob:
     }
 }
 
-int notif_subscribe(struct session_with_mutex *locked_session, const char *session_id, time_t start_time, time_t stop_time)
+int
+notif_subscribe(struct session_with_mutex *locked_session, const char *session_id, time_t start_time, time_t stop_time)
 {
     time_t start = -1;
     time_t stop = -1;
@@ -580,13 +583,12 @@ int notif_subscribe(struct session_with_mutex *locked_session, const char *sessi
 
     GETSPEC_ERR_REPLY
     if (err_reply != NULL) {
-                free_err_reply();
-                ERROR("RPC-Error received and cleaned, because we can't send it anywhere.");
-                goto operation_failed;
+        free_err_reply();
+        ERROR("RPC-Error received and cleaned, because we can't send it anywhere.");
+        goto operation_failed;
     }
 
     rpc = NULL; /* just note that rpc is already freed by send_recv_process() */
-    locked_session->ntfc_subscribed = 1;
 
     DEBUG("notifications: creating libnetconf notification thread (%s).", session_id);
 
@@ -753,7 +755,7 @@ callback_notification(struct lws *wsi, enum lws_callback_reasons reason, void *u
                 DEBUG("Close notification client");
                 return -1;
             }
-            if (ls->ntfc_subscribed != 0) {
+            if (nc_session_ntf_thread_running(ls->session)) {
                 DEBUG("notification: already subscribed");
                 DEBUG("unlock private lock");
                 pthread_mutex_unlock(&ls->lock);

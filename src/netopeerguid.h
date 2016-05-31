@@ -72,7 +72,6 @@ struct session_with_mutex {
     notification_t *notifications;
     int notif_count;
     json_object *hello_message;
-    char ntfc_subscribed; /**< 0 when notifications are not subscribed */
     char closed; /**< 0 when session is terminated */
     time_t last_activity;
     pthread_mutex_t lock; /**< mutex protecting the session from multiple access */
