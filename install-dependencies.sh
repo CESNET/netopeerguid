@@ -22,6 +22,6 @@ git clone git://github.com/CESNET/libyang && cd libyang && cmake . && make && su
 )
 
 (
-git clone git://github.com/CESNET/libnetconf2 -b devel && cd libnetconf2 && cmake . && make && sudo make install
+git clone git://github.com/CESNET/libnetconf2 && cd libnetconf2 && cmake . && make && sudo make install
 )
 
