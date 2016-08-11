@@ -2251,6 +2251,8 @@ create_error_reply(const char *errmess)
 {
     json_object *reply, *array;
 
+    ERROR(errmess);
+
     pthread_mutex_lock(&json_lock);
     reply = json_object_new_object();
     array = json_object_new_array();
@@ -2517,7 +2519,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     pthread_mutex_unlock(&json_lock);
 
     if (!target) {
-        ERROR("Missing the target parameter.");
+        reply = create_error_reply("Missing the target parameter.");
         goto finalize;
     }
     ds_type_t = parse_datastore(target);
@@ -2560,7 +2562,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     if (config) {
         locked_session = session_get_locked(session_key, NULL);
         if (!locked_session) {
-            ERROR("Unknown session or locking failed.");
+            reply = create_error_reply("Unknown session or locking failed.");
             goto finalize;
         }
 
@@ -2568,7 +2570,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
         session_unlock(locked_session);
 
         if (!content) {
-            ERROR("Failed to parse edit-config content.");
+        	reply = create_error_reply("Failed to parse edit-config content.");
             goto finalize;
         }
 
@@ -2578,7 +2580,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
         lyd_print_mem(&config, content, LYD_XML, LYP_WITHSIBLINGS);
         lyd_free_withsiblings(content);
         if (!config) {
-            ERROR("Failed to print edit-config content.");
+        	reply = create_error_reply("Failed to print edit-config content.");
             goto finalize;
         }
     } else {
@@ -2677,7 +2679,7 @@ handle_op_copyconfig(json_object *request, unsigned int session_key, int idx)
     if (config) {
         locked_session = session_get_locked(session_key, NULL);
         if (!locked_session) {
-            ERROR("Unknown session or locking failed.");
+        	reply = create_error_reply("Unknown session or locking failed.");
             goto finalize;
         }
 
@@ -2845,6 +2847,7 @@ handle_op_info(json_object *UNUSED(request), unsigned int session_key)
     DEBUG("LOCK wrlock %s", __func__);
     if (pthread_rwlock_rdlock(&session_lock) != 0) {
         ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
+        return create_error_reply("Internal error");
     }
 
     for (locked_session = netconf_sessions_list;
@@ -2902,7 +2905,7 @@ handle_op_generic(json_object *request, unsigned int session_key, int idx)
 
     locked_session = session_get_locked(session_key, NULL);
     if (!locked_session) {
-        ERROR("Unknown session or locking failed.");
+    	reply = create_error_reply("Unknown session or locking failed.");
         goto finalize;
     }
 
@@ -2988,7 +2991,7 @@ handle_op_reloadhello(json_object *UNUSED(request), unsigned int session_key)
     DEBUG("LOCK wrlock %s", __func__);
     if (pthread_rwlock_wrlock(&session_lock) != 0) {
         ERROR("Error while unlocking rwlock: %d (%s)", errno, strerror(errno));
-        return NULL;
+        reply = create_error_reply("Internal error");
     }
 
     for (locked_session = netconf_sessions_list;
