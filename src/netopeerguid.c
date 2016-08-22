@@ -3224,6 +3224,40 @@ finalize:
 }
 
 json_object *
+handle_op_commit(unsigned int session_key)
+{
+    json_object *reply = NULL;
+    char *target = NULL;
+    char *url = NULL;
+    struct nc_rpc *rpc = NULL;
+
+    DEBUG("Request: commit (session %u)", session_key);
+
+    /* commit */
+    rpc = nc_rpc_commit(0, 0, NULL, NULL, NC_PARAMTYPE_CONST);
+    if (rpc == NULL) {
+        DEBUG("mod_netconf: creating rpc request failed");
+        reply = create_error_reply("Creation of RPC request failed.");
+        goto finalize;
+    }
+
+    if ((reply = netconf_op(session_key, rpc, 0, NULL)) == NULL) {
+        CHECK_ERR_SET_REPLY
+
+        if (reply == NULL) {
+            DEBUG("Request: commit ok.");
+            reply = create_ok_reply();
+        }
+    }
+    nc_rpc_free(rpc);
+
+finalize:
+    CHECK_AND_FREE(target);
+    CHECK_AND_FREE(url);
+    return reply;
+}
+
+json_object *
 handle_op_query(json_object *request, unsigned int session_key, int idx)
 {
     json_object *reply = NULL, *filters, *obj, *filter_array;
@@ -3469,6 +3503,9 @@ thread_routine(void *arg)
                     break;
                 case MSG_VALIDATE:
                     reply = handle_op_validate(request, session_key);
+                    break;
+                case MSG_COMMIT:
+                    reply = handle_op_commit(session_key);
                     break;
                 case SCH_QUERY:
                     reply = handle_op_query(request, session_key, i);
