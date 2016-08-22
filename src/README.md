@@ -245,6 +245,11 @@ Required when target is "url":
 
 * key: url (string), value: URL of datastore to validate
 
+##### 17) commit Commit <candidate> datastore into <running> datastore
+
+* key: type (int), value: 20
+* key: sessions (array of ints), value: array of SIDs
+
 #### Enumeration of Message type (libnetconf)
 
 ```
@@ -270,6 +275,7 @@ Required when target is "url":
 	const MSG_RELOADHELLO		= 17;
 	const MSG_NTF_GETHISTORY	= 18;
 	const MSG_VALIDATE			= 19;
+	const MSG_COMMIT            = 20;
 
 	/* Enumeration of Message type - New for libyang */
 	const SCH_QUERY				= 100;
