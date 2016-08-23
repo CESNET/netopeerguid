@@ -1,5 +1,5 @@
 Summary: Netopeer-GUI (backend)
-Name: mod_netconf
+Name: netopeerguid
 Version: @VERSION@
 Release: @RELEASE@
 URL: https://github.com/CESNET/mod_netconf
@@ -10,8 +10,8 @@ Vendor: CESNET, z.s.p.o.
 Packager: @USERNAME@ <@USERMAIL@>
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}
 
-BuildRequires: apr apr-util libxml2-devel json-c-devel libwebsockets-devel libnetconf-devel
-Requires: json-c libwebsockets libnetconf httpd libxml2
+BuildRequires: json-c-devel libwebsockets-devel libnetconf-devel libyang-devel
+Requires: json-c libwebsockets libnetconf libyang
 
 %description
 Backend for Netopeer-GUI, available at https://github.com/CESNET/Netopeer-GUI
@@ -20,7 +20,7 @@ Backend for Netopeer-GUI, available at https://github.com/CESNET/Netopeer-GUI
 %setup
 
 %build
-%configure --prefix="$RPM_BUILD_ROOT" httpdmoduledir="/usr/lib64/httpd/modules" httpdconfddir="/etc/httpd/conf.d"
+%configure --prefix="$RPM_BUILD_ROOT"
 make
 
 %install
@@ -30,18 +30,16 @@ make install
 %post
 #add device module to configuration only when installing, not on update or reinstall.
 #https://fedoraproject.org/wiki/Packaging:Guidelines?rd=Packaging/Guidelines#Running_scriptlets_only_in_certain_situations
-[ -d /var/run/httpd ] || { mkdir -p /var/run/httpd && chown apache:apache /var/run/httpd; }
-chcon system_u:object_r:httpd_modules_t:s0 /etc/httpd/modules/mod_netconf.so
-service httpd restart
+service netopeerguid.rc restart
 
 %postun
 #delete device module from configuration only when erasing, not on update.
 #https://fedoraproject.org/wiki/Packaging:Guidelines?rd=Packaging/Guidelines#Running_scriptlets_only_in_certain_situations
-service httpd restart
-rm -f /tmp/mod_netconf.sock
+service netopeerguid.rc stop
+rm -f /var/run/netopeerguid.sock
 
 %files
+%{_bindir}/netopeerguid
 %doc README
-%{_libdir}/httpd/modules/*.so
-%config(noreplace) %{_sysconfdir}/httpd/conf.d/*.conf
+@SYSTEMD_SERVICE_FILE@
 

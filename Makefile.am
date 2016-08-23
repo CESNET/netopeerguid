@@ -2,16 +2,27 @@ ACLOCAL_AMFLAGS = -I m4
 
 
 SUBDIRS=src
-DIST_SUBDIRS=src conf.d
-
-if MANUAL_CONFD
-SUBDIRS+=conf.d
-endif
+DIST_SUBDIRS=src
 
 RPMDIR = RPMBUILD
 
 dist-hook:
 	find "$(distdir)" -name .gitignore -exec rm {} \;
+
+DISTCHECK_CONFIGURE_FLAGS="--without-systemd"
+if HAVE_SYSTEMD
+systemddir=@SYSTEMD_UNIT_DIR@
+systemd_DATA=netopeerguid.service
+
+install-data-hook:
+	@systemctl enable netopeerguid
+	@systemctl --system daemon-reload 2>/dev/null|| true
+	@echo "Run as root: service netopeerguid start"
+else
+install-data-hook:
+	@chkconfig --add netopeerguid.rc
+	@echo "Run as root: service netopeerguid.rc start"
+endif
 
 if MAKE_RPMS
 

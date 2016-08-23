@@ -1,6 +1,6 @@
-mod_netconf
-===========
+netopeerguid
+============
 
-Mod_netconf is a backend for [Netopeer-GUI](https://github.com/CESNET/Netopeer-GUI).
+Netopeerguid is a backend for [Netopeer-GUI](https://github.com/CESNET/Netopeer-GUI).
 
-See [src/README](src/README) for more information.
+See [src/README.md](src/README.md) for more information.

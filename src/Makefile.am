@@ -1,36 +1,30 @@
-SRCS=mod_netconf.c \
-     notification-server.c
+SRCS=netopeerguid.c \
+     notification_server.c
 
 HDRS=message_type.h \
-     notification_module.h \
-     mod_netconf.h
-
-noinst_PROGRAMS=webgui-backend
-webgui_backend_SOURCES=mod_netconf.c notification-server.c message_type.h notification_module.h mod_netconf.h
+     notification_server.h \
+     netopeerguid.h
 
 EXTRA_DIST=$(SRCS) $(HDRS)
+
+bin_PROGRAMS=netopeerguid
 
 dist-hook:
 	cp $(SRC) $(HDRS) $(distdir)
 
-all: mod_netconf.so webgui-backend
+all: netopeerguid test-client
 
-mod_netconf.so: mod_netconf.c notification-server.c
-	$(APXS) $(LIBS) $(CFLAGS) -c -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
+netopeerguid$(EXEEXT): netopeerguid.c notification_server.c netopeerguid.h
+	$(CC) $(CFLAGS) -o $@ $(srcdir)/netopeerguid.c $(srcdir)/notification_server.c $(LIBS)
 
-install-exec-local: mod_netconf.so
-	if [ "x${httpdmoduledir}" == x ]; then \
-	$(APXS) -i -a mod_netconf.la; else \
-	{ \
-	  mkdir -p "${httpdmoduledir}"; \
-	  $(APXS) -i -S LIBEXECDIR="${httpdmoduledir}" -a mod_netconf.la; } \
-	fi
+test-client$(EXEEXT): test-client.c
+	$(CC) $(CFLAGS) -o $@ $(srcdir)/test-client.c $(LIBS)
 
-webgui-backend$(EXEEXT): mod_netconf.c notification-server.c mod_netconf.h
-	$(CC) $(LIBS) $(CFLAGS) -DHTTPD_INDEPENDENT  `apr-1-config  --cflags --cppflags --includes --link-ld` -I/usr/include/httpd  -laprutil-1 -o $@ $(srcdir)/mod_netconf.c $(srcdir)/notification-server.c
-
+install-exec-hook:
+	$(INSTALL) -d $(DESTDIR)/etc/init.d/;
+	$(INSTALL_PROGRAM) -m 755 netopeerguid.rc $(DESTDIR)/etc/init.d/
 clean-local:
-	rm -rf .libs *.la *.lo *.slo test-client webgui-backend
+	rm -rf netopeerguid
 
 distclean-local:
 	rm -rf $(RPMDIR)

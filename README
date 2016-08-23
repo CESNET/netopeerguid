@@ -1,4 +1,4 @@
-The mod_netconf package consists of the Apache module mod_netconf (sources in src/)
-and testing the PHP script phpmynetconf (in scripts/).
+The netopeerguid package consists of the daemon (sources in src/)
+and testing PHP script phpmynetconf (in scripts/).
 To get more information about the parts, see the README in appropriate directory.
 
