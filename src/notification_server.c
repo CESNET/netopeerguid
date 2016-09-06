@@ -59,10 +59,6 @@ enum demo_protocols {
     DEMO_PROTOCOL_COUNT
 };
 
-#define SERVER_CERT_DIR "."
-#define SERVER_CERT "server.crt"
-#define SERVER_KEY "server.key"
-
 /*
  * We take a strict whitelist approach to stop ../ attacks
  */
@@ -847,8 +843,8 @@ notification_init(void)
     info.iface = NULL;
     info.protocols = protocols;
 
-    snprintf(cert_path, sizeof(cert_path), SERVER_CERT_DIR "/" SERVER_CERT);
-    snprintf(key_path, sizeof(key_path), SERVER_CERT_DIR "/" SERVER_KEY);
+    snprintf(cert_path, sizeof(cert_path), NOTIF_SERVER_CERT_PATH);
+    snprintf(key_path, sizeof(key_path), NOTIF_SERVER_PRIVKEY_PATH);
 
     info.ssl_cert_filepath = cert_path;
     info.ssl_private_key_filepath = key_path;

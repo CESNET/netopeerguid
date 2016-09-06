@@ -15,6 +15,11 @@
 /** groupname for change of ownership of socket file */
 #define CHOWN_GROUP "@CHOWN_GROUP@"
 
+/** path to the notification server certificate */
+#define NOTIF_SERVER_CERT_PATH "@CERT_PATH@"
+
+/** path to the notification server private key */
+#define NOTIF_SERVER_PRIVKEY_PATH "@PRIVKEY_PATH@"
 
 #endif
 

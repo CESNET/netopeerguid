@@ -60,6 +60,20 @@ AX_PTHREAD([CC="$PTHREAD_CC"], [AC_MSG_ERROR([pthread not found])])
 CFLAGS="-Wall -Wextra $json_CFLAGS $netconf2_CFLAGS $yang_FLAGS $PTHREAD_CFLAGS"
 LIBS="$json_LIBS $netconf2_LIBS $yang_LIBS $PTHREAD_LIBS"
 
+AC_ARG_WITH([cert-path],
+    AC_HELP_STRING([--with-cert-path], [Set notification server certificate]),
+    CERT_PATH="$withval",
+    AC_MSG_ERROR([Certificate path must be set.])
+)
+AC_SUBST([CERT_PATH])
+
+AC_ARG_WITH([private-key-path],
+    AC_HELP_STRING([--with-private-key-path], [Set notification server private key]),
+    PRIVKEY_PATH="$withval",
+    AC_MSG_ERROR([Private key path must be set.])
+)
+AC_SUBST([PRIVKEY_PATH])
+
 AC_ARG_WITH([notifications],
 [AC_HELP_STRING([--without-notifications], [Disable notifications])],
 [AS_IF([test "x$with_notifications" == "xno"],[CFLAGS="$CFLAGS"],
