@@ -158,5 +158,7 @@ echo "Su user for process:...............: $SU_USER"
 echo "Su group for process:..............: $SU_GROUP"
 echo "Chown user for sock file:...............: $CHOWN_USER"
 echo "Chown group for sock file:..............: $CHOWN_GROUP"
+echo "Notification server certificate:........: $CERT_PATH"
+echo "Notification server private key:........: $PRIVKEY_PATH"
 echo
 
