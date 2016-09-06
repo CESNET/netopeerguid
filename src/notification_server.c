@@ -260,7 +260,7 @@ callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, voi
             if (in && strcmp((const char *)in, whitelist[n].urlpath) == 0)
                 break;
 
-        sprintf(buf, SERVER_CERT_DIR "%s", whitelist[n].urlpath);
+        sprintf(buf, "./%s", whitelist[n].urlpath);
 
         if (lws_serve_http_file(wsi, buf, whitelist[n].mimetype, NULL, 0))
             return -1; /* through completion or error, close the socket */
