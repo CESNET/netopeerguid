@@ -10,7 +10,7 @@ EXTRA_DIST=$(SRCS) $(HDRS)
 bin_PROGRAMS=netopeerguid
 
 dist-hook:
-	cp $(SRC) $(HDRS) $(distdir)
+	cp $(SRCS) $(HDRS) $(distdir)
 
 all: netopeerguid test-client
 

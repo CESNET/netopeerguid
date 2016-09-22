@@ -30,9 +30,12 @@
 #include <pthread.h>
 #include <errno.h>
 #include <nc_client.h>
-#include <libwebsockets.h>
 
+#if defined(TEST_NOTIFICATION_SERVER) || defined(WITH_NOTIFICATIONS)
+#include <libwebsockets.h>
 #include "notification_server.h"
+#endif
+
 #include "netopeerguid.h"
 #include "../config.h"
 
