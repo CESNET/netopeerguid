@@ -1987,7 +1987,7 @@ libyang_query(unsigned int session_key, json_object *filter_array, int load_chil
 {
     int i;
     const char *filter;
-    const struct lys_node *node;
+    const struct lys_node *node = NULL;
     const struct lys_module *module = NULL;
     struct session_with_mutex *locked_session;
     json_object *ret = NULL, *data = NULL, *obj;
