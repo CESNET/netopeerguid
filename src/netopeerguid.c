@@ -3414,7 +3414,7 @@ thread_routine(void *arg)
                 goto send_reply;
             }
 
-            if ((operation < 4) || ((operation > 19) && (operation < 100)) || (operation > 101)) {
+            if ((operation < 4) || ((operation > 20) && (operation < 100)) || (operation > 101)) {
                 DEBUG("Unknown mod_netconf operation requested (%d)", operation);
                 replies = create_replies();
                 add_reply(replies, create_error_reply("Operation not supported."), 0);
