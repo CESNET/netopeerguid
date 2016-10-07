@@ -643,7 +643,9 @@ node_metadata_type(struct lys_type *type, struct lys_module *module, json_object
             node_metadata_text("identityref", "type", parent);
 
             array = json_object_new_array();
-            node_metadata_ident_recursive(type->info.ident.ref, array);
+            for (i = 0; i < type->info.ident.count; ++i) {
+                node_metadata_ident_recursive(type->info.ident.ref[i], array);
+            }
             json_object_object_add(parent, "identityval", array);
             break;
         case LY_TYPE_INST:
@@ -951,22 +953,26 @@ node_metadata_list(struct lys_node_list *list, json_object *parent)
 }
 
 static void
-node_metadata_anyxml(struct lys_node_anyxml *anyxml, json_object *parent)
+node_metadata_anydata(struct lys_node_anydata *anydata, json_object *parent)
 {
     json_object *obj;
 
     /* element type */
-    obj = json_object_new_string("anyxml");
+    if (anydata->nodetype == LYS_ANYXML) {
+        obj = json_object_new_string("anyxml");
+    } else {
+        obj = json_object_new_string("anydata");
+    }
     json_object_object_add(parent, "eltype", obj);
 
     /* shared info */
-    node_metadata_basic((struct lys_node *)anyxml, parent);
+    node_metadata_basic((struct lys_node *)anydata, parent);
 
     /* must */
-    node_metadata_must(anyxml->must_size, anyxml->must, parent);
+    node_metadata_must(anydata->must_size, anydata->must, parent);
 
     /* when */
-    node_metadata_when(anyxml->when, parent);
+    node_metadata_when(anydata->when, parent);
 
 }
 
@@ -987,12 +993,16 @@ node_metadata_case(struct lys_node_case *cas, json_object *parent)
 }
 
 static void
-node_metadata_rpc(struct lys_node_rpc *rpc, json_object *parent)
+node_metadata_rpc_action(struct lys_node_rpc_action *rpc, json_object *parent)
 {
     json_object *obj;
 
     /* element type */
-    obj = json_object_new_string("rpc");
+    if (rpc->nodetype == LYS_RPC) {
+        obj = json_object_new_string("rpc");
+    } else {
+        obj = json_object_new_string("action");
+    }
     json_object_object_add(parent, "eltype", obj);
 
     /* description */
@@ -1546,6 +1556,7 @@ netconf_getschema(unsigned int session_key, const char *identifier, const char *
 {
     struct nc_rpc *rpc;
     struct lyd_node *data = NULL;
+    struct lyd_node_anydata *adata;
     json_object *res = NULL;
     char *model_data = NULL;
 
@@ -1564,10 +1575,18 @@ netconf_getschema(unsigned int session_key, const char *identifier, const char *
         (*err) = NULL;
 
         if (data) {
-            if (((struct lyd_node_anyxml *)data)->xml_struct) {
-                lyxml_print_mem(&model_data, ((struct lyd_node_anyxml *)data)->value.xml, 0);
-            } else {
-                model_data = strdup(((struct lyd_node_anyxml *)data)->value.str);
+            adata = (struct lyd_node_anydata *)data;
+            switch (adata->value_type) {
+            case LYD_ANYDATA_XML:
+                lyxml_print_mem(&model_data, adata->value.xml, 0);
+                break;
+            case LYD_ANYDATA_CONSTSTRING:
+            case LYD_ANYDATA_STRING:
+                model_data = strdup(adata->value.str);
+                break;
+            default:
+                ERROR("internal error (%s:%d)", __FILE__, __LINE__);
+                break;
             }
             if (!model_data) {
                 ERROR("memory allocation fail (%s:%d)", __FILE__, __LINE__);
@@ -1753,7 +1772,7 @@ netconf_generic(unsigned int session_key, const char *xml_content, struct lyd_no
     json_object *res = NULL;
 
     /* create requests */
-    rpc = nc_rpc_generic_xml(xml_content, NC_PARAMTYPE_CONST);
+    rpc = nc_rpc_act_generic_xml(xml_content, NC_PARAMTYPE_CONST);
     if (rpc == NULL) {
         ERROR("mod_netconf: creating rpc request failed");
         return create_error_reply("Internal: Creating rpc request failed");
@@ -1812,13 +1831,15 @@ node_add_metadata(const struct lys_node *node, const struct lys_module *module, 
             node_metadata_list((struct lys_node_list *)node, meta_obj);
             break;
         case LYS_ANYXML:
-            node_metadata_anyxml((struct lys_node_anyxml *)node, meta_obj);
+        case LYS_ANYDATA:
+            node_metadata_anydata((struct lys_node_anydata *)node, meta_obj);
             break;
         case LYS_CASE:
             node_metadata_case((struct lys_node_case *)node, meta_obj);
             break;
         case LYS_RPC:
-            node_metadata_rpc((struct lys_node_rpc *)node, meta_obj);
+        case LYS_ACTION:
+            node_metadata_rpc_action((struct lys_node_rpc_action *)node, meta_obj);
             break;
         default: /* LYS_OUTPUT */
             ERROR("Internal: unuxpected nodetype (%s:%d)", __FILE__, __LINE__);
