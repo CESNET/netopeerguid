@@ -583,7 +583,7 @@ node_metadata_ident_recursive(struct lys_ident *ident, json_object *array)
     json_object_array_add(array, obj);
 
     if (ident->der) {
-        for (i = 0; ident->der[i]; ++i) {
+        for (i = 0; i < ident->der_size; ++i) {
             node_metadata_ident_recursive(ident->der[i], array);
         }
     }
