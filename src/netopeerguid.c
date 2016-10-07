@@ -2088,7 +2088,7 @@ libyang_merge(unsigned int session_key, const char *config)
 
     session_user_activity(nc_session_get_username(locked_session->session));
 
-    data_tree = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_STRICT);
+    data_tree = lyd_parse_mem(nc_session_get_ctx(locked_session->session), config, LYD_JSON, LYD_OPT_DATA | LYD_OPT_STRICT);
     if (!data_tree) {
         ERROR("Creating data tree failed.");
         ret = create_error_reply("Failed to create data tree from JSON config.");
