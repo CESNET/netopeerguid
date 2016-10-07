@@ -2930,7 +2930,7 @@ handle_op_generic(json_object *request, unsigned int session_key, int idx)
         goto finalize;
     }
 
-    node_content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), content, LYD_JSON, LYD_OPT_RPC);
+    node_content = lyd_parse_mem(nc_session_get_ctx(locked_session->session), content, LYD_JSON, LYD_OPT_RPC, NULL);
     session_unlock(locked_session);
 
     free(content);
