@@ -572,7 +572,7 @@ node_metadata_min_max(uint32_t min, uint32_t max, json_object *parent)
 static void
 node_metadata_ident_recursive(struct lys_ident *ident, json_object *array)
 {
-    int i;
+    unsigned int i;
     json_object *obj;
 
     if (!ident) {
@@ -583,8 +583,8 @@ node_metadata_ident_recursive(struct lys_ident *ident, json_object *array)
     json_object_array_add(array, obj);
 
     if (ident->der) {
-        for (i = 0; i < ident->der_size; ++i) {
-            node_metadata_ident_recursive(ident->der[i], array);
+        for (i = 0; i < ident->der->number; ++i) {
+            node_metadata_ident_recursive(ident->der->set.g[i], array);
         }
     }
 }
