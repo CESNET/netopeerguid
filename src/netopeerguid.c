@@ -1176,6 +1176,9 @@ netconf_connect(const char *host, const char *port, const char *user, const char
     session = nc_connect_ssh(host, (unsigned short)atoi(port), NULL);
     DEBUG("nc_session_connect done");
 
+    /* make it not strict */
+    nc_client_session_set_not_strict(session);
+
     /* if connected successful, add session to the list */
     if (session != NULL) {
         if ((locked_session = calloc(1, sizeof(struct session_with_mutex))) == NULL || pthread_mutex_init (&locked_session->lock, NULL) != 0) {
