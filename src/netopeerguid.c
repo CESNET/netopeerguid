@@ -2512,7 +2512,7 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
     NC_DATASTORE ds_type_t = -1;
     NC_RPC_EDIT_DFLTOP defop_type = 0;
     NC_RPC_EDIT_ERROPT erropt_type = 0;
-    NC_RPC_EDIT_TESTOPT testopt_type = NC_RPC_EDIT_TESTOPT_TESTSET;
+    NC_RPC_EDIT_TESTOPT testopt_type = 0;
     char *defop = NULL;
     char *erropt = NULL;
     char *config = NULL;
@@ -2613,8 +2613,6 @@ handle_op_editconfig(json_object *request, unsigned int session_key, int idx)
 
     if (testopt != NULL) {
         testopt_type = parse_testopt(testopt);
-    } else {
-        testopt_type = NC_RPC_EDIT_TESTOPT_TESTSET;
     }
 
     reply = netconf_editconfig(session_key, ds_type_t, defop_type, erropt_type, testopt_type, config);
