@@ -136,14 +136,14 @@ signal_handler(int sign)
 }
 
 int
-netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNUSED(session))
+netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNUSED(session), void *UNUSED(data))
 {
     /* always approve */
     return (EXIT_SUCCESS);
 }
 
 char *
-netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file))
+netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file), void *UNUSED(data))
 {
     char *buf;
     buf = strdup(password);
@@ -151,7 +151,7 @@ netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file))
 }
 
 char *
-netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUSED(hostname))
+netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUSED(hostname), void *UNUSED(data))
 {
     char *buf;
     buf = strdup(password);
@@ -160,7 +160,7 @@ netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUS
 
 char *
 netconf_callback_sshauth_interactive(const char *UNUSED(name), const char *UNUSED(instruction),
-                                     const char *UNUSED(prompt), int UNUSED(echo))
+                                     const char *UNUSED(prompt), int UNUSED(echo), void *UNUSED(data))
 {
     char *buf;
     buf = strdup(password);
@@ -216,7 +216,7 @@ prepare_status_message(struct session_with_mutex *s, struct nc_session *session)
     char *old_sid = NULL;
     const char *j_old_sid = NULL;
     char str_port[6];
-    const char **cpblts;
+    const char * const *cpblts;
     struct lyd_node *yanglib, *module, *node;
 
     if (s == NULL) {
@@ -447,6 +447,7 @@ static void
 node_metadata_basic(struct lys_node *node, json_object *parent)
 {
     json_object *obj;
+    const struct lys_module *mod;
 
     /* description */
     node_metadata_text(node->dsc, "description", parent);
@@ -481,13 +482,17 @@ node_metadata_basic(struct lys_node *node, json_object *parent)
     json_object_object_add(parent, "mandatory", obj);
 
     /* NACM extensions */
-    if (node->nacm) {
-        if (node->nacm & LYS_NACM_DENYW) {
-            obj = json_object_new_string("default-deny-write");
-        } else {
-            obj = json_object_new_string("default-deny-all");
+    if (node->ext_size) {
+        mod = ly_ctx_get_module(node->module->ctx, "ietf-netconf-acm", NULL);
+        if (mod && (mod->extensions_size == 2)) {
+            if (lys_ext_instance_presence(&mod->extensions[0], node->ext, node->ext_size) > -1) {
+                obj = json_object_new_string(mod->extensions[0].name);
+                json_object_object_add(parent, "ext", obj);
+            } else if (lys_ext_instance_presence(&mod->extensions[1], node->ext, node->ext_size) > -1) {
+                obj = json_object_new_string(mod->extensions[1].name);
+                json_object_object_add(parent, "ext", obj);
+            }
         }
-        json_object_object_add(parent, "ext", obj);
     }
 }
 
@@ -3810,10 +3815,10 @@ forked_proc(void)
     nc_client_init();
     nc_verbosity(NC_VERB_VERBOSE);
     nc_set_print_clb(clb_print);
-    nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check);
-    nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive);
-    nc_client_ssh_set_auth_password_clb(netconf_callback_sshauth_password);
-    nc_client_ssh_set_auth_privkey_passphrase_clb(netconf_callback_sshauth_passphrase);
+    nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check, NULL);
+    nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive, NULL);
+    nc_client_ssh_set_auth_password_clb(netconf_callback_sshauth_password, NULL);
+    nc_client_ssh_set_auth_privkey_passphrase_clb(netconf_callback_sshauth_passphrase, NULL);
 
     /* disable publickey authentication */
     nc_client_ssh_set_auth_pref(NC_SSH_AUTH_PUBLICKEY, -1);
