@@ -136,14 +136,14 @@ signal_handler(int sign)
 }
 
 int
-netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNUSED(session))
+netconf_callback_ssh_hostkey_check(const char* UNUSED(hostname), ssh_session UNUSED(session), void* UNUSED(priv))
 {
     /* always approve */
     return (EXIT_SUCCESS);
 }
 
 char *
-netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file))
+netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file), void* UNUSED(priv))
 {
     char *buf;
     buf = strdup(password);
@@ -151,7 +151,7 @@ netconf_callback_sshauth_passphrase(const char *UNUSED(priv_key_file))
 }
 
 char *
-netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUSED(hostname))
+netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUSED(hostname), void* UNUSED(priv))
 {
     char *buf;
     buf = strdup(password);
@@ -160,7 +160,7 @@ netconf_callback_sshauth_password(const char *UNUSED(username), const char *UNUS
 
 char *
 netconf_callback_sshauth_interactive(const char *UNUSED(name), const char *UNUSED(instruction),
-                                     const char *UNUSED(prompt), int UNUSED(echo))
+                                     const char *UNUSED(prompt), int UNUSED(echo), void* UNUSED(priv))
 {
     char *buf;
     buf = strdup(password);
@@ -3810,10 +3810,10 @@ forked_proc(void)
     nc_client_init();
     nc_verbosity(NC_VERB_VERBOSE);
     nc_set_print_clb(clb_print);
-    nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check);
-    nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive);
-    nc_client_ssh_set_auth_password_clb(netconf_callback_sshauth_password);
-    nc_client_ssh_set_auth_privkey_passphrase_clb(netconf_callback_sshauth_passphrase);
+    nc_client_ssh_set_auth_hostkey_check_clb(netconf_callback_ssh_hostkey_check, NULL);
+    nc_client_ssh_set_auth_interactive_clb(netconf_callback_sshauth_interactive, NULL);
+    nc_client_ssh_set_auth_password_clb(netconf_callback_sshauth_password, NULL);
+    nc_client_ssh_set_auth_privkey_passphrase_clb(netconf_callback_sshauth_passphrase, NULL);
 
     /* disable publickey authentication */
     nc_client_ssh_set_auth_pref(NC_SSH_AUTH_PUBLICKEY, -1);
